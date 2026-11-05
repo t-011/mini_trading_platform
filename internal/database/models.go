@@ -11,6 +11,17 @@ import (
 	"github.com/google/uuid"
 )
 
+type Bars1min struct {
+	ID        uuid.UUID
+	StockID   uuid.UUID
+	Open      int64
+	High      int64
+	Low       int64
+	Close     int64
+	Volume    int64
+	Timestamp time.Time
+}
+
 type RefreshToken struct {
 	Token     string
 	CreatedAt time.Time
@@ -18,6 +29,17 @@ type RefreshToken struct {
 	UserID    uuid.UUID
 	ExpiresAt time.Time
 	RevokedAt sql.NullTime
+}
+
+type Stock struct {
+	ID        uuid.UUID
+	Symbol    string
+	Name      string
+	Exchange  string
+	AssetType string
+	Currency  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type User struct {

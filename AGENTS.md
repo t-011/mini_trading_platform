@@ -54,7 +54,7 @@ Think: what if two requests try to spend the same cash at once? Look up database
 Show holdings, total value, and profit/loss.
 Think: do you store the value, or calculate it from trades every time? What are the trade-offs?
 
-5. Journal
+5. Journal (WE'll only add notes for now)
 
 Each trade has a reason, tags, and optional notes added later.
 Think: is the journal entry part of the trade, or its own table? Why?

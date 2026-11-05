@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -46,7 +47,8 @@ func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
 		HashedPassword: hashed_password,
 	})
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "DB ERROR: "+err.Error())
+		log.Printf("create user: query err: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "")
 		return
 	}
 

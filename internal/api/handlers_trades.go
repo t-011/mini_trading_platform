@@ -1,16 +1,11 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
-	"fmt"
-	"log"
-	"math"
 	"net/http"
-	"strconv"
 
 	"github.com/google/uuid"
-	"github.com/t-011/mini_trading_platform/internal/database"
+	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
 func (cfg *Config) createTrade(w http.ResponseWriter, r *http.Request) {
@@ -25,19 +20,7 @@ func (cfg *Config) createTrade(w http.ResponseWriter, r *http.Request) {
 
 	var reqData params
 	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
-		respondWithError(w, http.StatusBadRequest, "stock_id not valid uuid")
-		return
-	}
-
-	valid_sides := map[string]bool{"buy": true, "sell": true}
-	if !valid_sides[reqData.Side] {
-		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("invalid side %q: must be 'buy' or 'sell'", reqData.Side))
-		return
-	}
-
-	qty, err := strconv.ParseFloat(reqData.Quantity, 64)
-	if err != nil || qty <= 0 {
-		respondWithError(w, http.StatusBadRequest, "bad quantity")
+		respondWithError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -47,103 +30,14 @@ func (cfg *Config) createTrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := cfg.DbConn.BeginTx(r.Context(), nil)
-	if err != nil {
-		log.Printf("create trade: begin tx: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-	defer tx.Rollback()
-
-	qtx := cfg.Db.WithTx(tx)
-
-	closeAmount, err := qtx.GetLatestClose(r.Context(), reqData.Stock_id)
-	if err == sql.ErrNoRows {
-		// we're collapsing the errors: (stock_id not found, no bars for stock exist)
-		respondWithError(w, http.StatusNotFound, "nonexistent stock or no price available")
-		return
-	}
-	if err != nil {
-		log.Printf("trade: get close: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	raw := float64(closeAmount) * qty // cents, fractional
-
-	var cost int64 // round in favor of the house: buy up, sell down
-	if reqData.Side == "buy" {
-		cost = int64(math.Ceil(raw))
-
-		res, err := qtx.Debit(r.Context(), database.DebitParams{
-			Cost:   cost,
-			UserID: userID,
-		})
-		if err != nil {
-			log.Printf("trade: debit: %v", err)
-			respondWithError(w, http.StatusInternalServerError, "")
-			return
-		}
-		if res == 0 {
-			respondWithError(w, http.StatusUnprocessableEntity, "insufficient funds")
-			return
-		}
-
-	} else {
-		cost = int64(math.Floor(raw))
-
-		positionStr, err := qtx.GetPosition(r.Context(), database.GetPositionParams{
-			UserID: userID,
-			StockID: reqData.Stock_id,
-		})
-
-		if err != nil {
-			log.Printf("trade: get position: %v", err)
-			respondWithError(w, http.StatusInternalServerError, "")
-			return
-		}
-
-		position, err := strconv.ParseFloat(positionStr, 64)
-		if err != nil {
-			log.Printf("trade: parse position: %v", err)
-			respondWithError(w, http.StatusInternalServerError, "")
-			return
-		}
-
-		// ponytail: float share compare, exact-decimal if it ever misfires
-		if position < qty {
-			respondWithError(w, http.StatusUnprocessableEntity, "insufficient shares")
-			return
-		}
-
-		err = qtx.Credit(r.Context(), database.CreditParams{
-			Cost:   cost,
-			UserID: userID,
-		})
-
-		if err != nil {
-			log.Printf("trade: credit: %v", err)
-			respondWithError(w, http.StatusInternalServerError, "")
-			return
-		}
-	}
-
-	trade, err := qtx.CreateTrade(r.Context(), database.CreateTradeParams{
-		UserID:  userID,
-		StockID: reqData.Stock_id,
-		Type:    reqData.Side,
-		Qty:     reqData.Quantity, // exact string, no float
-		Price:   closeAmount,      // per-share fill price, cents
+	result, err := cfg.Trading.PlaceTrade(r.Context(), trading.PlaceTradeInput{
+		UserID:   userID,
+		StockID:  reqData.Stock_id,
+		Side:     reqData.Side,
+		Quantity: reqData.Quantity,
 	})
 	if err != nil {
-		log.Printf("create trade: insert: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	if err = tx.Commit(); err != nil {
-		log.Printf("create trade: commit: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -158,13 +52,13 @@ func (cfg *Config) createTrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload := respBody{
-		Id:        trade.ID.String(),
-		StockID:   trade.StockID.String(),
-		Type:      trade.Type,
-		Qty:       trade.Qty,
-		Price:     trade.Price,
-		Cost:      cost,
-		Timestamp: trade.Timestamp.String(),
+		Id:        result.Trade.ID.String(),
+		StockID:   result.Trade.StockID.String(),
+		Type:      result.Trade.Type,
+		Qty:       result.Trade.Qty,
+		Price:     result.Trade.Price,
+		Cost:      result.Cost,
+		Timestamp: result.Trade.Timestamp.String(),
 	}
 
 	respondWithJSON(w, http.StatusCreated, payload)

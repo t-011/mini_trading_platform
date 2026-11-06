@@ -31,8 +31,6 @@ func main() {
 
 	queries := database.New(db)
 	cfg := api.Config{
-		Db:        queries,
-		DbConn:    db,
 		JwtSecret: jwtSecret,
 
 		Users:   users.New(queries, db, jwtSecret),

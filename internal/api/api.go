@@ -1,19 +1,15 @@
 package api
 
 import (
-	"database/sql"
 	"net/http"
 
-	"github.com/t-011/mini_trading_platform/internal/database"
 	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 	"github.com/t-011/mini_trading_platform/internal/users"
 )
 
 type Config struct {
-	Db        *database.Queries
-	DbConn    *sql.DB // raw pool, for beginning transactions
-	JwtSecret string
+	JwtSecret string // used by the auth middleware to validate request tokens
 
 	Users   *users.Service
 	Market  *market.Service

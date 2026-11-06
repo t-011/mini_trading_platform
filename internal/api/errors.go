@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
@@ -13,9 +14,10 @@ import (
 // unknown errors are logged and collapsed to a generic 500.
 func respondWithServiceError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity):
+	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity),
+		errors.Is(err, market.ErrBadInterval):
 		respondWithError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, trading.ErrNoPrice):
+	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, market.ErrStockNotFound):
 		respondWithError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, trading.ErrInsufficientFunds), errors.Is(err, trading.ErrInsufficientShares):
 		respondWithError(w, http.StatusUnprocessableEntity, err.Error())

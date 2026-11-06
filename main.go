@@ -11,6 +11,7 @@ import (
 
 	"github.com/t-011/mini_trading_platform/internal/api"
 	"github.com/t-011/mini_trading_platform/internal/database"
+	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
@@ -33,6 +34,7 @@ func main() {
 		DbConn:    db,
 		JwtSecret: jwtSecret,
 
+		Market:  market.New(queries),
 		Trading: trading.New(queries, db),
 	}
 

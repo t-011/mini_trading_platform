@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/t-011/mini_trading_platform/internal/database"
+	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
@@ -13,6 +14,7 @@ type Config struct {
 	DbConn    *sql.DB // raw pool, for beginning transactions
 	JwtSecret string
 
+	Market  *market.Service
 	Trading *trading.Service
 }
 

@@ -1,8 +1,6 @@
 package api
 
 import (
-	"database/sql"
-	"log"
 	"net/http"
 	"strconv"
 
@@ -22,23 +20,16 @@ func (cfg *Config) getStocks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-type", "application/json")
 
-	query := r.URL.Query()
-
-	search := query.Get("search")
+	search := r.URL.Query().Get("search")
 	limit := clamp(parseIntQueries(r, "limit", DEFAULT_LIMIT), MIN_LIMIT, MAX_LIMIT)
 	offset := parseIntQueries(r, "offset", DEFAULT_OFFSET)
 	if offset < 0 {
 		offset = 0
 	}
 
-	stocks, err := cfg.Db.GetStockBySymbolOrName(r.Context(), database.GetStockBySymbolOrNameParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-		Search: sql.NullString{String: search, Valid: true},
-	})
+	stocks, err := cfg.Market.ListStocks(r.Context(), search, int32(limit), int32(offset))
 	if err != nil {
-		log.Printf("getStocks: query failed: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -46,11 +37,7 @@ func (cfg *Config) getStocks(w http.ResponseWriter, r *http.Request) {
 		Stocks []database.Stock `json:"stocks"`
 	}
 
-	payload := respBody{
-		Stocks: stocks,
-	}
-
-	respondWithJSON(w, http.StatusOK, payload)
+	respondWithJSON(w, http.StatusOK, respBody{Stocks: stocks})
 }
 
 func (cfg *Config) getStock(w http.ResponseWriter, r *http.Request) {
@@ -59,20 +46,13 @@ func (cfg *Config) getStock(w http.ResponseWriter, r *http.Request) {
 
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		log.Printf("getStock: {id} conversion failed: %v", err)
 		respondWithError(w, http.StatusBadRequest, "{id} not uuid")
 		return
 	}
 
-	stock, err := cfg.Db.GetStockById(r.Context(), id)
-	if err == sql.ErrNoRows {
-		respondWithError(w, http.StatusNotFound, "stock not found")
-		return
-	}
-
+	stock, err := cfg.Market.GetStock(r.Context(), id)
 	if err != nil {
-		log.Printf("getStock: query failed: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -80,22 +60,14 @@ func (cfg *Config) getStock(w http.ResponseWriter, r *http.Request) {
 		Stock database.Stock `json:"stock"`
 	}
 
-	payload := respBody{
-		Stock: stock,
-	}
-
-	respondWithJSON(w, http.StatusOK, payload)
+	respondWithJSON(w, http.StatusOK, respBody{Stock: stock})
 }
 
 func parseIntQueries(r *http.Request, key string, default_int int) int {
-	query := r.URL.Query()
-
-	num, err := strconv.Atoi(query.Get(key))
-
+	num, err := strconv.Atoi(r.URL.Query().Get(key))
 	if err != nil {
 		num = default_int
 	}
-
 	return num
 }
 

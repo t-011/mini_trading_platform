@@ -42,12 +42,35 @@ func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := cfg.Db.CreateUser(r.Context(), database.CreateUserParams{
+	tx, err := cfg.DbConn.BeginTx(r.Context(), nil)
+	if err != nil {
+		log.Printf("create user: begin tx: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "")
+		return
+	}
+	defer tx.Rollback() // no-op if we Commit; safety net for any early return
+
+	qtx := cfg.Db.WithTx(tx)
+
+	user, err := qtx.CreateUser(r.Context(), database.CreateUserParams{
 		Email:          reqData.Email,
 		HashedPassword: hashed_password,
 	})
 	if err != nil {
 		log.Printf("create user: query err: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "")
+		return
+	}
+
+	err = qtx.CreateAccountForUserId(r.Context(), user.ID);
+	if err != nil {
+		log.Printf("create user: query err: %v", err)
+		respondWithError(w, http.StatusInternalServerError, "")
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("create user: commit: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "")
 		return
 	}
@@ -169,7 +192,7 @@ func (cfg *Config) updateUserHandler(w http.ResponseWriter, r *http.Request) {
 	// Get userid from jwt
 	userID, ok := userIDFromContext(r.Context())
 	if !ok {
-		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		respondWithError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 

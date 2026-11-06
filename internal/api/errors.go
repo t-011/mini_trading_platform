@@ -7,6 +7,7 @@ import (
 
 	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
+	"github.com/t-011/mini_trading_platform/internal/users"
 )
 
 // respondWithServiceError maps a domain sentinel error to an HTTP status.
@@ -15,8 +16,12 @@ import (
 func respondWithServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity),
-		errors.Is(err, market.ErrBadInterval):
+		errors.Is(err, market.ErrBadInterval), errors.Is(err, users.ErrMissingFields):
 		respondWithError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, users.ErrInvalidCredentials), errors.Is(err, users.ErrInvalidToken):
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, users.ErrEmailTaken):
+		respondWithError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, market.ErrStockNotFound):
 		respondWithError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, trading.ErrInsufficientFunds), errors.Is(err, trading.ErrInsufficientShares):

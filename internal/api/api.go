@@ -7,6 +7,7 @@ import (
 	"github.com/t-011/mini_trading_platform/internal/database"
 	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
+	"github.com/t-011/mini_trading_platform/internal/users"
 )
 
 type Config struct {
@@ -14,6 +15,7 @@ type Config struct {
 	DbConn    *sql.DB // raw pool, for beginning transactions
 	JwtSecret string
 
+	Users   *users.Service
 	Market  *market.Service
 	Trading *trading.Service
 }

@@ -1,77 +1,29 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
-	"time"
 
 	"github.com/t-011/mini_trading_platform/internal/auth"
-	"github.com/t-011/mini_trading_platform/internal/database"
 )
 
-const (
-	ACCESS_TOKEN_DURATION  = 3600 * time.Second  // 1hr
-	REFRESH_TOKEN_DURATION = 60 * 24 * time.Hour // 60 days
-)
+type authParams struct {
+	Password string `json:"password"`
+	Email    string `json:"email"`
+}
 
 func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
-	type params struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
-	}
-
 	w.Header().Set("Content-type", "application/json")
 
-	var reqData params
+	var reqData authParams
 	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't decode json")
+		respondWithError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if reqData.Password == "" || reqData.Email == "" {
-		respondWithError(w, http.StatusBadRequest, "Required fields missing")
-		return
-	}
-
-	hashed_password, err := auth.HashPassword(reqData.Password)
+	user, err := cfg.Users.Create(r.Context(), reqData.Email, reqData.Password)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	tx, err := cfg.DbConn.BeginTx(r.Context(), nil)
-	if err != nil {
-		log.Printf("create user: begin tx: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-	defer tx.Rollback() // no-op if we Commit; safety net for any early return
-
-	qtx := cfg.Db.WithTx(tx)
-
-	user, err := qtx.CreateUser(r.Context(), database.CreateUserParams{
-		Email:          reqData.Email,
-		HashedPassword: hashed_password,
-	})
-	if err != nil {
-		log.Printf("create user: query err: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	err = qtx.CreateAccountForUserId(r.Context(), user.ID);
-	if err != nil {
-		log.Printf("create user: query err: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	if err = tx.Commit(); err != nil {
-		log.Printf("create user: commit: %v", err)
-		respondWithError(w, http.StatusInternalServerError, "")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -82,44 +34,26 @@ func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
 		Email      string `json:"email"`
 	}
 
-	payload := respBody{
+	respondWithJSON(w, http.StatusCreated, respBody{
 		Id:         user.ID.String(),
 		Created_at: user.CreatedAt.String(),
 		Updated_at: user.UpdatedAt.String(),
 		Email:      user.Email,
-	}
-
-	respondWithJSON(w, http.StatusCreated, payload)
+	})
 }
 
 func (cfg *Config) loginHandler(w http.ResponseWriter, r *http.Request) {
-	type params struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
-	}
-
 	w.Header().Set("Content-type", "application/json")
 
-	var reqData params
+	var reqData authParams
 	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't decode json")
+		respondWithError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if reqData.Password == "" || reqData.Email == "" {
-		respondWithError(w, http.StatusBadRequest, "Required fields missing")
-		return
-	}
-
-	user, err := cfg.Db.GetUserByEmail(r.Context(), reqData.Email)
+	result, err := cfg.Users.Login(r.Context(), reqData.Email, reqData.Password)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "DB ERROR: "+err.Error())
-		return
-	}
-
-	ok, err := auth.CheckPasswordHash(reqData.Password, user.HashedPassword)
-	if err != nil || !ok {
-		respondWithError(w, http.StatusUnauthorized, "Incorrect email or password")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -132,126 +66,64 @@ func (cfg *Config) loginHandler(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refresh_token"`
 	}
 
-	accessToken, err := auth.MakeJWT(user.ID, cfg.JwtSecret, ACCESS_TOKEN_DURATION)
-	if err != nil {
-		fmt.Println(err)
-		respondWithError(w, http.StatusInternalServerError, "Server Error")
-		return
-	}
-
-	newRefreshToken, err := auth.MakeRefreshToken()
-	if err != nil {
-		fmt.Println(err)
-		respondWithError(w, http.StatusInternalServerError, "Server Error")
-		return
-	}
-
-	refreshToken, err := cfg.Db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
-		Token:     newRefreshToken,
-		UserID:    user.ID,
-		ExpiresAt: time.Now().Add(REFRESH_TOKEN_DURATION),
-		RevokedAt: sql.NullTime{},
+	respondWithJSON(w, http.StatusOK, respBody{
+		Id:           result.User.ID.String(),
+		Created_at:   result.User.CreatedAt.String(),
+		Updated_at:   result.User.UpdatedAt.String(),
+		Email:        result.User.Email,
+		Token:        result.AccessToken,
+		RefreshToken: result.RefreshToken,
 	})
-	if err != nil {
-		fmt.Println(err)
-		respondWithError(w, http.StatusInternalServerError, "Server Error")
-		return
-	}
-
-	payload := respBody{
-		Id:           user.ID.String(),
-		Created_at:   user.CreatedAt.String(),
-		Updated_at:   user.UpdatedAt.String(),
-		Email:        user.Email,
-		Token:        accessToken,
-		RefreshToken: refreshToken.Token,
-	}
-
-	respondWithJSON(w, http.StatusOK, payload)
 }
 
 func (cfg *Config) updateUserHandler(w http.ResponseWriter, r *http.Request) {
-	type params struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
-	}
-
 	w.Header().Set("Content-type", "application/json")
 
-	var reqData params
+	var reqData authParams
 	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't decode json")
+		respondWithError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if reqData.Password == "" || reqData.Email == "" {
-		respondWithError(w, http.StatusBadRequest, "Required fields missing")
-		return
-	}
-
-	// Get userid from jwt
 	userID, ok := userIDFromContext(r.Context())
 	if !ok {
 		respondWithError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	hashed_password, err := auth.HashPassword(reqData.Password)
+	user, err := cfg.Users.Update(r.Context(), userID, reqData.Email, reqData.Password)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "")
-		return
-	}
-
-	user, err := cfg.Db.UpdateUser(r.Context(), database.UpdateUserParams{
-		ID:             userID,
-		Email:          reqData.Email,
-		HashedPassword: hashed_password,
-	})
-
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "")
+		respondWithServiceError(w, err)
 		return
 	}
 
 	type respBody struct {
-		Id          string `json:"id"`
-		Created_at  string `json:"created_at"`
-		Updated_at  string `json:"updated_at"`
-		Email       string `json:"email"`
+		Id         string `json:"id"`
+		Created_at string `json:"created_at"`
+		Updated_at string `json:"updated_at"`
+		Email      string `json:"email"`
 	}
 
-	payload := respBody{
-		Id:          user.ID.String(),
-		Created_at:  user.CreatedAt.String(),
-		Updated_at:  user.UpdatedAt.String(),
-		Email:       user.Email,
-	}
-
-	respondWithJSON(w, http.StatusOK, payload)
+	respondWithJSON(w, http.StatusOK, respBody{
+		Id:         user.ID.String(),
+		Created_at: user.CreatedAt.String(),
+		Updated_at: user.UpdatedAt.String(),
+		Email:      user.Email,
+	})
 }
 
 func (cfg *Config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-type", "application/json")
 
-	// Get refresh token from header
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		respondWithError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	refreshToken, err := cfg.Db.GetRefreshToken(r.Context(), token)
+	accessToken, err := cfg.Users.Refresh(r.Context(), token)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			respondWithError(w, http.StatusUnauthorized, "Unauthorized")
-		} else {
-			fmt.Println(err)
-			respondWithError(w, http.StatusInternalServerError, "Server Error")
-		}
-		return
-	}
-
-	if time.Now().After(refreshToken.ExpiresAt) || refreshToken.RevokedAt.Valid {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		respondWithServiceError(w, err)
 		return
 	}
 
@@ -259,32 +131,18 @@ func (cfg *Config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		Token string `json:"token"`
 	}
 
-	jwtToken, err := auth.MakeJWT(refreshToken.UserID, cfg.JwtSecret, ACCESS_TOKEN_DURATION)
-	if err != nil {
-		fmt.Println(err)
-		respondWithError(w, http.StatusInternalServerError, "Server Error")
-		return
-	}
-
-	payload := respBody{
-		Token: jwtToken,
-	}
-
-	respondWithJSON(w, http.StatusOK, payload)
+	respondWithJSON(w, http.StatusOK, respBody{Token: accessToken})
 }
 
 func (cfg *Config) revokeTokenHandler(w http.ResponseWriter, r *http.Request) {
-
-	// Get refresh token from header
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Unauthorized")
+		respondWithError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	err = cfg.Db.RevokeToken(r.Context(), token)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Server Error")
+	if err := cfg.Users.Revoke(r.Context(), token); err != nil {
+		respondWithServiceError(w, err)
 		return
 	}
 

@@ -15,9 +15,9 @@ import (
 const getBarsByInterval = `-- name: GetBarsByInterval :many
 SELECT date_trunc($1, timestamp) AS bucket,          -- 'day','week','month'...
         (array_agg(open  ORDER BY timestamp ASC ))[1] AS open,
-        max(high), min(low),
+        max(high) AS high, min(low) AS low,
         (array_agg(close ORDER BY timestamp DESC))[1] AS close,
-        sum(volume)
+        sum(volume) AS volume
     FROM bars_1min
     WHERE stock_id = $2 
         AND timestamp >= $3 AND timestamp < $4
@@ -35,10 +35,10 @@ type GetBarsByIntervalParams struct {
 type GetBarsByIntervalRow struct {
 	Bucket int64
 	Open   interface{}
-	Max    interface{}
-	Min    interface{}
+	High   interface{}
+	Low    interface{}
 	Close  interface{}
-	Sum    int64
+	Volume int64
 }
 
 func (q *Queries) GetBarsByInterval(ctx context.Context, arg GetBarsByIntervalParams) ([]GetBarsByIntervalRow, error) {
@@ -58,10 +58,10 @@ func (q *Queries) GetBarsByInterval(ctx context.Context, arg GetBarsByIntervalPa
 		if err := rows.Scan(
 			&i.Bucket,
 			&i.Open,
-			&i.Max,
-			&i.Min,
+			&i.High,
+			&i.Low,
 			&i.Close,
-			&i.Sum,
+			&i.Volume,
 		); err != nil {
 			return nil, err
 		}
@@ -74,4 +74,18 @@ func (q *Queries) GetBarsByInterval(ctx context.Context, arg GetBarsByIntervalPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const getLatestClose = `-- name: GetLatestClose :one
+SELECT close FROM bars_1min
+    WHERE stock_id = $1
+    ORDER BY timestamp DESC
+LIMIT 1
+`
+
+func (q *Queries) GetLatestClose(ctx context.Context, stockID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getLatestClose, stockID)
+	var close int64
+	err := row.Scan(&close)
+	return close, err
 }

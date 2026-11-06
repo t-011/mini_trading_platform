@@ -11,6 +11,7 @@ import (
 
 	"github.com/t-011/mini_trading_platform/internal/api"
 	"github.com/t-011/mini_trading_platform/internal/database"
+	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
 func main() {
@@ -31,6 +32,8 @@ func main() {
 		Db:        queries,
 		DbConn:    db,
 		JwtSecret: jwtSecret,
+
+		Trading: trading.New(queries, db),
 	}
 
 	server := &http.Server{

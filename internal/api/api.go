@@ -28,5 +28,8 @@ func NewHandler(cfg *Config) http.Handler {
 	mux.HandleFunc("GET /v1/stocks/{id}", cfg.getStock)
 	mux.HandleFunc("GET /v1/stocks/{id}/bars", cfg.getBars)
 
+	// Trades (auth required)
+	mux.Handle("POST /v1/trades", cfg.middlewareAuth(http.HandlerFunc(cfg.createTrade)))
+
 	return mux
 }

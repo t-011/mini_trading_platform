@@ -19,7 +19,6 @@ func main() {
 	dbURL := os.Getenv("DB_URL")
 	jwtSecret := os.Getenv("JWT_SECRET")
 
-
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		fmt.Println(err)
@@ -29,9 +28,10 @@ func main() {
 
 	queries := database.New(db)
 	cfg := api.Config{
-			Db: queries,
-			JwtSecret: jwtSecret,
-		}
+		Db:        queries,
+		DbConn:    db,
+		JwtSecret: jwtSecret,
+	}
 
 	server := &http.Server{
 		Addr:    ":8080",

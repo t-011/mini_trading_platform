@@ -11,3 +11,6 @@ UPDATE accounts
 UPDATE accounts
     SET cash = cash + sqlc.arg(cost)
     WHERE user_id = sqlc.arg(user_id);
+
+-- name: GetCash :one
+SELECT cash FROM accounts WHERE user_id = $1;

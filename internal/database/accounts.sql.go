@@ -55,3 +55,14 @@ func (q *Queries) Debit(ctx context.Context, arg DebitParams) (int64, error) {
 	}
 	return result.RowsAffected()
 }
+
+const getCash = `-- name: GetCash :one
+SELECT cash FROM accounts WHERE user_id = $1
+`
+
+func (q *Queries) GetCash(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getCash, userID)
+	var cash int64
+	err := row.Scan(&cash)
+	return cash, err
+}

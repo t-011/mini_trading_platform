@@ -51,6 +51,64 @@ func (q *Queries) CreateTrade(ctx context.Context, arg CreateTradeParams) (Trade
 	return i, err
 }
 
+const getHoldings = `-- name: GetHoldings :many
+SELECT
+    s.id AS stock_id, s.symbol, s.name,
+    SUM(CASE WHEN t.type='buy' THEN t.qty ELSE -t.qty END)::numeric AS qty,
+    -- weighted-avg buy price, cents. ponytail: weighted-avg basis, not FIFO lots
+    (SUM(t.qty * t.price) FILTER (WHERE t.type='buy')
+        / NULLIF(SUM(t.qty) FILTER (WHERE t.type='buy'), 0))::numeric AS avg_cost,
+    lc.close AS last_close
+FROM trades t
+JOIN stocks s ON s.id = t.stock_id
+LEFT JOIN LATERAL (
+    SELECT close FROM bars_1min b
+    WHERE b.stock_id = t.stock_id ORDER BY timestamp DESC LIMIT 1
+) lc ON true
+WHERE t.user_id = $1
+GROUP BY s.id, s.symbol, s.name, lc.close
+HAVING SUM(CASE WHEN t.type='buy' THEN t.qty ELSE -t.qty END) > 0
+`
+
+type GetHoldingsRow struct {
+	StockID   uuid.UUID
+	Symbol    string
+	Name      string
+	Qty       string
+	AvgCost   string
+	LastClose int64
+}
+
+func (q *Queries) GetHoldings(ctx context.Context, userID uuid.UUID) ([]GetHoldingsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getHoldings, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetHoldingsRow
+	for rows.Next() {
+		var i GetHoldingsRow
+		if err := rows.Scan(
+			&i.StockID,
+			&i.Symbol,
+			&i.Name,
+			&i.Qty,
+			&i.AvgCost,
+			&i.LastClose,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPosition = `-- name: GetPosition :one
 SELECT COALESCE(SUM(CASE WHEN type='buy' THEN qty ELSE -qty END), 0)::numeric
     FROM trades
@@ -67,4 +125,48 @@ func (q *Queries) GetPosition(ctx context.Context, arg GetPositionParams) (strin
 	var column_1 string
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const listTradesByUser = `-- name: ListTradesByUser :many
+SELECT id, user_id, stock_id, type, qty, price, timestamp FROM trades
+    WHERE user_id = $1
+    ORDER BY timestamp DESC
+    LIMIT $2 OFFSET $3
+`
+
+type ListTradesByUserParams struct {
+	UserID uuid.UUID
+	Limit  int32
+	Offset int32
+}
+
+func (q *Queries) ListTradesByUser(ctx context.Context, arg ListTradesByUserParams) ([]Trade, error) {
+	rows, err := q.db.QueryContext(ctx, listTradesByUser, arg.UserID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Trade
+	for rows.Next() {
+		var i Trade
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.StockID,
+			&i.Type,
+			&i.Qty,
+			&i.Price,
+			&i.Timestamp,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -59,6 +59,13 @@ type Trade struct {
 	Timestamp time.Time
 }
 
+type TradeNote struct {
+	ID        uuid.UUID
+	TradeID   uuid.UUID
+	Body      string
+	CreatedAt time.Time
+}
+
 type User struct {
 	ID             uuid.UUID
 	CreatedAt      time.Time

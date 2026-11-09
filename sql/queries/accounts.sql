@@ -14,3 +14,8 @@ UPDATE accounts
 
 -- name: GetCash :one
 SELECT cash FROM accounts WHERE user_id = $1;
+
+-- name: LockAccount :exec
+-- Serializes a user's concurrent trades: taken at the top of the trade tx so
+-- read-then-write sell checks can't race (two sells overselling a position).
+SELECT id FROM accounts WHERE user_id = $1 FOR UPDATE;

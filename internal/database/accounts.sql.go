@@ -66,3 +66,14 @@ func (q *Queries) GetCash(ctx context.Context, userID uuid.UUID) (int64, error) 
 	err := row.Scan(&cash)
 	return cash, err
 }
+
+const lockAccount = `-- name: LockAccount :exec
+SELECT id FROM accounts WHERE user_id = $1 FOR UPDATE
+`
+
+// Serializes a user's concurrent trades: taken at the top of the trade tx so
+// read-then-write sell checks can't race (two sells overselling a position).
+func (q *Queries) LockAccount(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, lockAccount, userID)
+	return err
+}

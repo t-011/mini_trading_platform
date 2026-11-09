@@ -44,6 +44,14 @@ func (s *Service) PlaceTrade(ctx context.Context, in PlaceTradeInput) (TradeResu
 
 	qtx := s.db.WithTx(tx)
 
+	// Lock the account row up front so a user's concurrent trades serialize.
+	// Without this, two sells could both pass the read-then-write position
+	// check below and oversell the holding. Buys were already safe (atomic
+	// conditional Debit), but locking here covers both paths uniformly.
+	if err := qtx.LockAccount(ctx, in.UserID); err != nil {
+		return TradeResult{}, fmt.Errorf("lock account: %w", err)
+	}
+
 	closeAmount, err := qtx.GetLatestClose(ctx, in.StockID)
 	if err == sql.ErrNoRows {
 		// collapses two cases: unknown stock, or stock with no bars yet

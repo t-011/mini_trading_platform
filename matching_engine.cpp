@@ -1,7 +1,10 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <random>
 #include <iterator>
 #include <map>
 #include <vector>
@@ -201,7 +204,56 @@ void test_cancel_twice() {
     assert(bids.empty());
 }
 
-int main() {
+// --- benchmark: ./me --bench. Build with -O2 -DNDEBUG, no sanitizers. ---
+
+struct Op {
+    bool is_cancel;
+    Order order;       // used when !is_cancel
+    int64_t price;
+    uint64_t cancel_id;
+};
+
+void bench(size_t n) {
+    reset();
+    std::mt19937_64 rng(42);                      // fixed seed: same workload every run
+    std::vector<Op> ops;
+    ops.reserve(n);
+    uint64_t next_id = 1;
+    for (size_t i = 0; i < n; i++) {
+        if (next_id > 1 && rng() % 100 < 30) {    // ~30% cancels of some earlier id
+            ops.push_back({true, {}, 0, 1 + rng() % (next_id - 1)});
+        } else {
+            Order o{next_id++, rng() % 2 == 0, (int64_t)(1 + rng() % 100)};
+            ops.push_back({false, o, 90 + (int64_t)(rng() % 21), 0});  // 90..110
+        }
+    }
+
+    std::vector<int64_t> lat(n);                  // ns per op
+    size_t fills = 0;
+    using clk = std::chrono::steady_clock;
+    auto t0 = clk::now();
+    for (size_t i = 0; i < n; i++) {
+        auto a = clk::now();
+        if (ops[i].is_cancel) cancel(ops[i].cancel_id);
+        else fills += submit(ops[i].order, ops[i].price).size();
+        lat[i] = std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - a).count();
+    }
+    double secs = std::chrono::duration<double>(clk::now() - t0).count();
+
+    std::sort(lat.begin(), lat.end());
+    auto pct = [&](double p) { return lat[(size_t)(p * (n - 1))]; };
+    std::printf("%zu ops in %.3fs -> %.0f ops/sec, %zu fills\n", n, secs, n / secs, fills);
+    std::printf("latency ns: p50 %lld  p99 %lld  p99.9 %lld  max %lld\n",
+                (long long)pct(0.50), (long long)pct(0.99), (long long)pct(0.999), (long long)lat.back());
+    // ponytail: per-op clock reads add ~20-40ns each; ops/sec includes that overhead
+}
+
+int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {
+        bench(1'000'000);
+        return 0;
+    }
+
     test_rests_when_book_empty();
     test_partial_fill_at_maker_price();
     test_time_priority_same_level();

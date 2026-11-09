@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/t-011/mini_trading_platform/internal/database"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 )
 
@@ -41,25 +42,10 @@ func (cfg *Config) createTrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	type respBody struct {
-		Id        string `json:"id"`
-		StockID   string `json:"stock_id"`
-		Type      string `json:"type"`
-		Qty       string `json:"qty"`
-		Price     int64  `json:"price"`
-		Cost      int64  `json:"cost"`
-		Timestamp string `json:"timestamp"`
-	}
-
-	payload := respBody{
-		Id:        result.Trade.ID.String(),
-		StockID:   result.Trade.StockID.String(),
-		Type:      result.Trade.Type,
-		Qty:       result.Trade.Qty,
-		Price:     result.Trade.Price,
-		Cost:      result.Cost,
-		Timestamp: result.Trade.Timestamp.String(),
-	}
-
-	respondWithJSON(w, http.StatusCreated, payload)
+	// Embed the raw trade (PascalCase, same shape as GET /v1/trades) and add
+	// the computed fill cost, which isn't stored on the trade row.
+	respondWithJSON(w, http.StatusCreated, struct {
+		database.Trade
+		Cost int64
+	}{Trade: result.Trade, Cost: result.Cost})
 }

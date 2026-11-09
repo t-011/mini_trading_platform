@@ -38,8 +38,12 @@ func main() {
 		Trading: trading.New(queries, db),
 	}
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: api.NewHandler(&cfg),
 	}
 

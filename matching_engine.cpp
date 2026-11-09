@@ -4,8 +4,9 @@
 #include <cstdio>
 #include <iterator>
 #include <map>
-#include <deque>
 #include <vector>
+#include <list>
+#include <unordered_map>
 
 struct Order {
     uint64_t id;
@@ -20,8 +21,15 @@ struct Fill {
     int64_t qty;
 };
 
-std::map<int64_t, std::deque<Order>> asks;
-std::map<int64_t, std::deque<Order>> bids;
+struct Loc {
+    bool is_buy;
+    int64_t price;
+    std::list<Order>::iterator it;
+};
+std::unordered_map<uint64_t, Loc> order_index;
+
+std::map<int64_t, std::list<Order>> asks;
+std::map<int64_t, std::list<Order>> bids;
 
 std::vector<Fill> submit(Order order, int64_t price) {
     auto& side = order.is_buy ? bids : asks;
@@ -30,14 +38,13 @@ std::vector<Fill> submit(Order order, int64_t price) {
     std::vector<Fill> fills;
 
     while (order.qty > 0 && !op.empty()) {
-        auto best = order.is_buy ? op.begin() : std::prev(op.end());    
+        auto level = order.is_buy ? op.begin() : std::prev(op.end());
 
-        bool crosses = order.is_buy ? best->first <= price
-                                    : best->first >= price;
+        bool crosses = order.is_buy ? level->first <= price
+                                    : level->first >= price;
         
         if (!crosses) break;
 
-        auto level = order.is_buy ? op.begin() : std::prev(op.end());
         auto& maker = level->second.front();
 
         int64_t quantity = std::min(order.qty, maker.qty);
@@ -47,20 +54,44 @@ std::vector<Fill> submit(Order order, int64_t price) {
         order.qty -= quantity;
         maker.qty -= quantity;
 
-        if (maker.qty == 0) level->second.pop_front();
-        if (level->second.empty()) op.erase(level);
+        if (maker.qty == 0) {
+            order_index.erase(maker.id); 
+            level->second.pop_front();
+        }
+
+        if (level->second.empty()) op.erase(level); 
     }
 
     if (order.qty > 0) {
-        side[price].push_back(order);
+        auto& level = side[price];
+        level.push_back(order);
+        order_index[order.id] = {order.is_buy, price, std::prev(level.end())};
     }
 
     return fills;
 }
 
+bool cancel(uint64_t id) {
+    auto it = order_index.find(id);
+    
+    if (it == order_index.end()) return false;
+
+    Loc& loc = it->second;
+
+    auto& book = loc.is_buy ? bids : asks;
+
+    auto level = book.find(loc.price);
+    level->second.erase(loc.it);
+    if (level->second.empty()) book.erase(level);
+
+    order_index.erase(id);
+
+    return true;
+}
+
 // --- tests: plain functions + assert. A failed assert aborts with file:line. ---
 
-void reset() { asks.clear(); bids.clear(); }
+void reset() { asks.clear(); bids.clear(); order_index.clear(); }
 
 void test_rests_when_book_empty() {
     reset();
@@ -121,6 +152,55 @@ void test_sell_hits_highest_bid() {
     assert(fills[0].maker == 2 && fills[0].price == 101);
 }
 
+void test_cancel_resting() {
+    reset();
+    submit({1, false, 5}, 100);
+    assert(cancel(1));
+    assert(asks.empty());                         // emptied level erased
+    assert(submit({2, true, 5}, 100).empty());    // nothing left to hit
+}
+
+void test_cancel_unknown() {
+    reset();
+    assert(!cancel(42));
+}
+
+void test_cancel_after_full_fill() {
+    reset();
+    submit({1, false, 5}, 100);
+    submit({2, true, 5}, 100);                    // fills 1 completely
+    assert(!cancel(1));
+    assert(!cancel(2));                           // taker never rested
+}
+
+void test_cancel_partial_remainder() {
+    reset();
+    submit({1, false, 10}, 100);
+    submit({2, true, 4}, 100);                    // 6 left on order 1
+    assert(cancel(1));
+    assert(asks.empty());
+}
+
+void test_cancel_middle_keeps_priority() {
+    reset();
+    submit({1, false, 5}, 100);
+    submit({2, false, 5}, 100);
+    submit({3, false, 5}, 100);
+    assert(cancel(2));
+    auto fills = submit({4, true, 10}, 100);
+    assert(fills.size() == 2);
+    assert(fills[0].maker == 1 && fills[1].maker == 3);
+    assert(asks.empty());
+}
+
+void test_cancel_twice() {
+    reset();
+    submit({1, true, 5}, 99);
+    assert(cancel(1));
+    assert(!cancel(1));
+    assert(bids.empty());
+}
+
 int main() {
     test_rests_when_book_empty();
     test_partial_fill_at_maker_price();
@@ -128,5 +208,11 @@ int main() {
     test_sweeps_levels_best_first();
     test_no_cross_rests();
     test_sell_hits_highest_bid();
+    test_cancel_resting();
+    test_cancel_unknown();
+    test_cancel_after_full_fill();
+    test_cancel_partial_remainder();
+    test_cancel_middle_keeps_priority();
+    test_cancel_twice();
     std::puts("all tests passed");
 }

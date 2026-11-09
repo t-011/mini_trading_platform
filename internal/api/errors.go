@@ -16,13 +16,15 @@ import (
 func respondWithServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity),
+		errors.Is(err, trading.ErrBadNote),
 		errors.Is(err, market.ErrBadInterval), errors.Is(err, users.ErrMissingFields):
 		respondWithError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, users.ErrInvalidCredentials), errors.Is(err, users.ErrInvalidToken):
 		respondWithError(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, users.ErrEmailTaken):
 		respondWithError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, market.ErrStockNotFound):
+	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, trading.ErrTradeNotFound),
+		errors.Is(err, market.ErrStockNotFound):
 		respondWithError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, trading.ErrInsufficientFunds), errors.Is(err, trading.ErrInsufficientShares):
 		respondWithError(w, http.StatusUnprocessableEntity, err.Error())

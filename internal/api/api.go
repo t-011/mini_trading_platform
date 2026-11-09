@@ -33,6 +33,13 @@ func NewHandler(cfg *Config) http.Handler {
 
 	// Trades (auth required)
 	mux.Handle("POST /v1/trades", cfg.middlewareAuth(http.HandlerFunc(cfg.createTrade)))
+	mux.Handle("GET /v1/trades", cfg.middlewareAuth(http.HandlerFunc(cfg.listTrades)))
+	mux.Handle("GET /v1/trades/{id}/notes", cfg.middlewareAuth(http.HandlerFunc(cfg.getNotes)))
+	mux.Handle("POST /v1/trades/{id}/notes", cfg.middlewareAuth(http.HandlerFunc(cfg.addNote)))
+
+	// Portfolio (auth required)
+	mux.Handle("GET /v1/portfolio", cfg.middlewareAuth(http.HandlerFunc(cfg.getPortfolio)))
+	mux.Handle("GET /v1/cash", cfg.middlewareAuth(http.HandlerFunc(cfg.getCash)))
 
 	return mux
 }

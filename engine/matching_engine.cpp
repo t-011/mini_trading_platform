@@ -2,11 +2,17 @@
 //   tests:   c++ -std=c++17 -g -fsanitize=address,undefined matching_engine.cpp -o me && ./me
 //   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
 //   serve:   c++ -std=c++17 -O2 matching_engine.cpp -o me && ./me --serve MINI [MORE...]
+//
+// MINI_EXCHANGE_SPIN=1 busy-spins instead of sleeping when a ring is empty.
+// Use it only when the engine has its own core (compose `cpuset`): with one
+// stock that pins the whole process, so no affinity code is needed here.
+// ponytail: several stocks on several cores -> pthread_setaffinity_np per stock thread
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <random>
 #include <iterator>
@@ -108,8 +114,24 @@ struct Book {
 
 // --- serve: one thread per stock, each owning its Book and its two rings. ---
 
-// Spin briefly, then sleep, so an idle stock doesn't pin a whole core.
+bool busy_spin = false;  // set from MINI_EXCHANGE_SPIN in main
+
+// Tells the CPU we're in a spin-wait: saves power and frees the core's
+// pipeline for a hyperthread sibling. Costs a few ns.
+inline void cpu_relax() {
+#if defined(__x86_64__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    asm volatile("yield");
+#endif
+}
+
+// Called while a ring is empty (or full).
+//   busy_spin: the core is ours, never sleep, lowest latency.
+//   otherwise: spin briefly, then sleep, so an idle stock doesn't hog a shared core.
 void idle(int& spins) {
+    cpu_relax();
+    if (busy_spin) return;
     if (++spins < 1000) return;
     std::this_thread::sleep_for(std::chrono::microseconds(50));
 }
@@ -136,7 +158,7 @@ void run_stock(const std::string& symbol) {
         emit(Event{0, id, 0, 0, 0, EV_REJECTED, reason, {}});
     };
 
-    std::printf("%s: serving on %s.{in,out}\n", symbol.c_str(), base.c_str());
+    std::printf("%s: serving on %s.{in,out}%s\n", symbol.c_str(), base.c_str(), busy_spin ? " (busy-spin)" : "");
     std::fflush(stdout);
 
     Request request;
@@ -326,6 +348,8 @@ void bench(uint64_t n) {
 
 int main(int argc, char** argv) {
     if (argc > 2 && std::strcmp(argv[1], "--serve") == 0) {
+        const char* spin = std::getenv("MINI_EXCHANGE_SPIN");
+        busy_spin = spin && std::strcmp(spin, "1") == 0;
         serve(argc - 2, argv + 2);
         return 0;
     }

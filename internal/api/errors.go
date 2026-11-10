@@ -16,7 +16,7 @@ import (
 func respondWithServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity),
-		errors.Is(err, trading.ErrBadNote),
+		errors.Is(err, trading.ErrBadNote), errors.Is(err, trading.ErrBadPrice),
 		errors.Is(err, market.ErrBadInterval), errors.Is(err, users.ErrMissingFields):
 		respondWithError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, users.ErrInvalidCredentials), errors.Is(err, users.ErrInvalidToken):
@@ -24,10 +24,16 @@ func respondWithServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, users.ErrEmailTaken):
 		respondWithError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, trading.ErrTradeNotFound),
+		errors.Is(err, trading.ErrStockNotFound), errors.Is(err, trading.ErrOrderNotFound),
 		errors.Is(err, market.ErrStockNotFound):
 		respondWithError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, trading.ErrInsufficientFunds), errors.Is(err, trading.ErrInsufficientShares):
+	case errors.Is(err, trading.ErrInsufficientFunds), errors.Is(err, trading.ErrInsufficientShares),
+		errors.Is(err, trading.ErrNotTradable):
 		respondWithError(w, http.StatusUnprocessableEntity, err.Error())
+	case errors.Is(err, trading.ErrOrderNotOpen):
+		respondWithError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, trading.ErrExchangeDown):
+		respondWithError(w, http.StatusServiceUnavailable, err.Error())
 	default:
 		log.Printf("service error: %v", err)
 		respondWithError(w, http.StatusInternalServerError, "")

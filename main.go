@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/t-011/mini_trading_platform/internal/api"
 	"github.com/t-011/mini_trading_platform/internal/database"
+	"github.com/t-011/mini_trading_platform/internal/exchange"
 	"github.com/t-011/mini_trading_platform/internal/market"
 	"github.com/t-011/mini_trading_platform/internal/trading"
 	"github.com/t-011/mini_trading_platform/internal/users"
@@ -30,12 +32,25 @@ func main() {
 	defer db.Close()
 
 	queries := database.New(db)
+
+	// Our exchange's stocks; the engine must already be serving them
+	// (engine/me --serve MINI). Without it the rest of the API still works.
+	exchanges := map[string]*exchange.Client{}
+	for _, symbol := range []string{"MINI"} {
+		client, err := exchange.Dial(symbol)
+		if err != nil {
+			log.Printf("exchange: %s unavailable, its orders are disabled: %v", symbol, err)
+			continue
+		}
+		exchanges[symbol] = client
+	}
+
 	cfg := api.Config{
 		JwtSecret: jwtSecret,
 
 		Users:   users.New(queries, db, jwtSecret),
 		Market:  market.New(queries),
-		Trading: trading.New(queries, db),
+		Trading: trading.New(queries, db, exchanges),
 	}
 
 	port := os.Getenv("PORT")

@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <new>
 #include <type_traits>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 constexpr uint64_t CACHE_LINE = 128; // For apple silicon. CHANGE DEPENDING ON cpu ARCHITECTURE.
 
@@ -39,3 +42,27 @@ public:
     }
 };
 
+// Maps a ring into a file so two processes can share it.
+//   create = true  -> make the file, size it, construct a fresh ring (engine side)
+//   create = false -> attach to a ring someone else already created
+// Returns nullptr on failure.
+template <typename R>
+R* map_ring(const char* path, bool create) {
+    int flags = create ? (O_RDWR | O_CREAT | O_TRUNC) : O_RDWR;
+    int fd = open(path, flags, 0600);
+    if (fd < 0) return nullptr;
+
+    // A new file is 0 bytes; touching mapped memory past its end is a SIGBUS.
+    if (create && ftruncate(fd, sizeof(R)) != 0) {
+        close(fd);
+        return nullptr;
+    }
+
+    // MAP_SHARED: writes are visible to every process mapping this file.
+    void* mem = mmap(nullptr, sizeof(R), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);  // the mapping keeps the file alive
+    if (mem == MAP_FAILED) return nullptr;
+
+    if (create) return new (mem) R();  // construct in place: zeroes head/tail
+    return static_cast<R*>(mem);       // attach: never re-construct, it would reset the counters
+}

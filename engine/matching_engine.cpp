@@ -1,3 +1,6 @@
+// Build:
+//   tests:   c++ -std=c++17 -g -fsanitize=address,undefined matching_engine.cpp -o me && ./me
+//   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -29,179 +32,182 @@ struct Loc {
     int64_t price;
     std::list<Order>::iterator it;
 };
-std::unordered_map<uint64_t, Loc> order_index;
 
-std::map<int64_t, std::list<Order>> asks;
-std::map<int64_t, std::list<Order>> bids;
+// One stock's order book. Only ever touched by that stock's thread: no locks.
+struct Book {
+    std::map<int64_t, std::list<Order>> asks;
+    std::map<int64_t, std::list<Order>> bids;
+    std::unordered_map<uint64_t, Loc> order_index;
 
-std::vector<Fill> submit(Order order, int64_t price) {
-    auto& side = order.is_buy ? bids : asks;
-    auto& op = !order.is_buy ? bids : asks;
+    std::vector<Fill> submit(Order order, int64_t price) {
+        auto& side = order.is_buy ? bids : asks;
+        auto& op = !order.is_buy ? bids : asks;
 
-    std::vector<Fill> fills;
+        std::vector<Fill> fills;
 
-    while (order.qty > 0 && !op.empty()) {
-        auto level = order.is_buy ? op.begin() : std::prev(op.end());
+        while (order.qty > 0 && !op.empty()) {
+            auto level = order.is_buy ? op.begin() : std::prev(op.end());
 
-        bool crosses = order.is_buy ? level->first <= price
-                                    : level->first >= price;
-        
-        if (!crosses) break;
+            bool crosses = order.is_buy ? level->first <= price
+                                        : level->first >= price;
 
-        auto& maker = level->second.front();
+            if (!crosses) break;
 
-        int64_t quantity = std::min(order.qty, maker.qty);
+            auto& maker = level->second.front();
 
-        fills.push_back(Fill{order.id, maker.id, level->first, quantity}); // level->first == level_price
+            int64_t quantity = std::min(order.qty, maker.qty);
 
-        order.qty -= quantity;
-        maker.qty -= quantity;
+            fills.push_back(Fill{order.id, maker.id, level->first, quantity}); // level->first == level_price
 
-        if (maker.qty == 0) {
-            order_index.erase(maker.id); 
-            level->second.pop_front();
+            order.qty -= quantity;
+            maker.qty -= quantity;
+
+            if (maker.qty == 0) {
+                order_index.erase(maker.id);
+                level->second.pop_front();
+            }
+
+            if (level->second.empty()) op.erase(level);
         }
 
-        if (level->second.empty()) op.erase(level); 
+        if (order.qty > 0) {
+            auto& level = side[price];
+            level.push_back(order);
+            order_index[order.id] = {order.is_buy, price, std::prev(level.end())};
+        }
+
+        return fills;
     }
 
-    if (order.qty > 0) {
-        auto& level = side[price];
-        level.push_back(order);
-        order_index[order.id] = {order.is_buy, price, std::prev(level.end())};
+    // Returns the qty removed (Go releases that much of the reservation), 0 if not resting.
+    int64_t cancel(uint64_t id) {
+        auto it = order_index.find(id);
+
+        if (it == order_index.end()) return 0;
+
+        Loc& loc = it->second;
+
+        auto& book = loc.is_buy ? bids : asks;
+
+        auto level = book.find(loc.price);
+        int64_t removed = loc.it->qty;
+        level->second.erase(loc.it);
+        if (level->second.empty()) book.erase(level);
+
+        order_index.erase(it);
+
+        return removed;
     }
-
-    return fills;
-}
-
-bool cancel(uint64_t id) {
-    auto it = order_index.find(id);
-    
-    if (it == order_index.end()) return false;
-
-    Loc& loc = it->second;
-
-    auto& book = loc.is_buy ? bids : asks;
-
-    auto level = book.find(loc.price);
-    level->second.erase(loc.it);
-    if (level->second.empty()) book.erase(level);
-
-    order_index.erase(id);
-
-    return true;
-}
+};
 
 // --- tests: plain functions + assert. A failed assert aborts with file:line. ---
 
-void reset() { asks.clear(); bids.clear(); order_index.clear(); }
-
 void test_rests_when_book_empty() {
-    reset();
-    auto fills = submit({1, false, 10}, 100);     // sell 10 @ 100
+    Book book;
+    auto fills = book.submit({1, false, 10}, 100);     // sell 10 @ 100
     assert(fills.empty());
-    assert(asks.at(100).front().qty == 10);       // resting on the ask side
+    assert(book.asks.at(100).front().qty == 10);       // resting on the ask side
 }
 
 void test_partial_fill_at_maker_price() {
-    reset();
-    submit({1, false, 10}, 100);                  // maker: sell 10 @ 100
-    auto fills = submit({2, true, 4}, 101);       // taker: buy 4 @ 101
+    Book book;
+    book.submit({1, false, 10}, 100);                  // maker: sell 10 @ 100
+    auto fills = book.submit({2, true, 4}, 101);       // taker: buy 4 @ 101
     assert(fills.size() == 1);
     assert(fills[0].taker == 2 && fills[0].maker == 1);
     assert(fills[0].price == 100);                // maker's price, not 101
     assert(fills[0].qty == 4);
-    assert(asks.at(100).front().qty == 6);        // remainder still resting
-    assert(bids.empty());                         // taker fully filled, didn't rest
+    assert(book.asks.at(100).front().qty == 6);        // remainder still resting
+    assert(book.bids.empty());                         // taker fully filled, didn't rest
 }
 
 void test_time_priority_same_level() {
-    reset();
-    submit({1, false, 5}, 100);                   // first in line
-    submit({2, false, 5}, 100);                   // second in line
-    auto fills = submit({3, true, 7}, 100);
+    Book book;
+    book.submit({1, false, 5}, 100);                   // first in line
+    book.submit({2, false, 5}, 100);                   // second in line
+    auto fills = book.submit({3, true, 7}, 100);
     assert(fills.size() == 2);
     assert(fills[0].maker == 1 && fills[0].qty == 5);
     assert(fills[1].maker == 2 && fills[1].qty == 2);
-    assert(asks.at(100).front().id == 2 && asks.at(100).front().qty == 3);
+    assert(book.asks.at(100).front().id == 2 && book.asks.at(100).front().qty == 3);
 }
 
 void test_sweeps_levels_best_first() {
-    reset();
-    submit({1, false, 5}, 101);
-    submit({2, false, 5}, 100);                   // better ask, added later
-    auto fills = submit({3, true, 8}, 101);
+    Book book;
+    book.submit({1, false, 5}, 101);
+    book.submit({2, false, 5}, 100);                   // better ask, added later
+    auto fills = book.submit({3, true, 8}, 101);
     assert(fills.size() == 2);
     assert(fills[0].price == 100 && fills[0].qty == 5);
     assert(fills[1].price == 101 && fills[1].qty == 3);
-    assert(asks.count(100) == 0);                 // emptied level got erased
+    assert(book.asks.count(100) == 0);                 // emptied level got erased
 }
 
 void test_no_cross_rests() {
-    reset();
-    submit({1, false, 5}, 100);
-    auto fills = submit({2, true, 5}, 99);
+    Book book;
+    book.submit({1, false, 5}, 100);
+    auto fills = book.submit({2, true, 5}, 99);
     assert(fills.empty());
-    assert(bids.at(99).front().id == 2);
-    assert(asks.at(100).front().qty == 5);        // untouched
+    assert(book.bids.at(99).front().id == 2);
+    assert(book.asks.at(100).front().qty == 5);        // untouched
 }
 
 void test_sell_hits_highest_bid() {
-    reset();
-    submit({1, true, 5}, 99);
-    submit({2, true, 5}, 101);                    // best bid
-    auto fills = submit({3, false, 5}, 98);
+    Book book;
+    book.submit({1, true, 5}, 99);
+    book.submit({2, true, 5}, 101);                    // best bid
+    auto fills = book.submit({3, false, 5}, 98);
     assert(fills.size() == 1);
     assert(fills[0].maker == 2 && fills[0].price == 101);
 }
 
 void test_cancel_resting() {
-    reset();
-    submit({1, false, 5}, 100);
-    assert(cancel(1));
-    assert(asks.empty());                         // emptied level erased
-    assert(submit({2, true, 5}, 100).empty());    // nothing left to hit
+    Book book;
+    book.submit({1, false, 5}, 100);
+    assert(book.cancel(1));
+    assert(book.asks.empty());                         // emptied level erased
+    assert(book.submit({2, true, 5}, 100).empty());    // nothing left to hit
 }
 
 void test_cancel_unknown() {
-    reset();
-    assert(!cancel(42));
+    Book book;
+    assert(!book.cancel(42));
 }
 
 void test_cancel_after_full_fill() {
-    reset();
-    submit({1, false, 5}, 100);
-    submit({2, true, 5}, 100);                    // fills 1 completely
-    assert(!cancel(1));
-    assert(!cancel(2));                           // taker never rested
+    Book book;
+    book.submit({1, false, 5}, 100);
+    book.submit({2, true, 5}, 100);                    // fills 1 completely
+    assert(!book.cancel(1));
+    assert(!book.cancel(2));                           // taker never rested
 }
 
 void test_cancel_partial_remainder() {
-    reset();
-    submit({1, false, 10}, 100);
-    submit({2, true, 4}, 100);                    // 6 left on order 1
-    assert(cancel(1));
-    assert(asks.empty());
+    Book book;
+    book.submit({1, false, 10}, 100);
+    book.submit({2, true, 4}, 100);                    // 6 left on order 1
+    assert(book.cancel(1));
+    assert(book.asks.empty());
 }
 
 void test_cancel_middle_keeps_priority() {
-    reset();
-    submit({1, false, 5}, 100);
-    submit({2, false, 5}, 100);
-    submit({3, false, 5}, 100);
-    assert(cancel(2));
-    auto fills = submit({4, true, 10}, 100);
+    Book book;
+    book.submit({1, false, 5}, 100);
+    book.submit({2, false, 5}, 100);
+    book.submit({3, false, 5}, 100);
+    assert(book.cancel(2));
+    auto fills = book.submit({4, true, 10}, 100);
     assert(fills.size() == 2);
     assert(fills[0].maker == 1 && fills[1].maker == 3);
-    assert(asks.empty());
+    assert(book.asks.empty());
 }
 
 void test_cancel_twice() {
-    reset();
-    submit({1, true, 5}, 99);
-    assert(cancel(1));
-    assert(!cancel(1));
-    assert(bids.empty());
+    Book book;
+    book.submit({1, true, 5}, 99);
+    assert(book.cancel(1));
+    assert(!book.cancel(1));
+    assert(book.bids.empty());
 }
 
 // --- benchmark: ./me --bench. Build with -O2 -DNDEBUG, no sanitizers. ---
@@ -213,38 +219,39 @@ struct Op {
     uint64_t cancel_id;
 };
 
-void bench(size_t n) {
-    reset();
+void bench(uint64_t n) {
+    Book book;
     std::mt19937_64 rng(42);                      // fixed seed: same workload every run
     std::vector<Op> ops;
     ops.reserve(n);
     uint64_t next_id = 1;
-    for (size_t i = 0; i < n; i++) {
+    for (uint64_t i = 0; i < n; i++) {
         if (next_id > 1 && rng() % 100 < 30) {    // ~30% cancels of some earlier id
             ops.push_back({true, {}, 0, 1 + rng() % (next_id - 1)});
         } else {
-            Order o{next_id++, rng() % 2 == 0, (int64_t)(1 + rng() % 100)};
-            ops.push_back({false, o, 90 + (int64_t)(rng() % 21), 0});  // 90..110
+            Order order{next_id++, rng() % 2 == 0, (int64_t)(1 + rng() % 100)};
+            ops.push_back({false, order, 90 + (int64_t)(rng() % 21), 0});  // 90..110
         }
     }
 
-    std::vector<int64_t> lat(n);                  // ns per op
-    size_t fills = 0;
+    std::vector<int64_t> latencies(n);                  // ns per op
+    uint64_t fills = 0;
     using clk = std::chrono::steady_clock;
-    auto t0 = clk::now();
-    for (size_t i = 0; i < n; i++) {
-        auto a = clk::now();
-        if (ops[i].is_cancel) cancel(ops[i].cancel_id);
-        else fills += submit(ops[i].order, ops[i].price).size();
-        lat[i] = std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - a).count();
+    auto start = clk::now();
+    for (uint64_t i = 0; i < n; i++) {
+        auto op_start = clk::now();
+        if (ops[i].is_cancel) book.cancel(ops[i].cancel_id);
+        else fills += book.submit(ops[i].order, ops[i].price).size();
+        latencies[i] = std::chrono::duration_cast<std::chrono::nanoseconds>(clk::now() - op_start).count();
     }
-    double secs = std::chrono::duration<double>(clk::now() - t0).count();
+    double secs = std::chrono::duration<double>(clk::now() - start).count();
 
-    std::sort(lat.begin(), lat.end());
-    auto pct = [&](double p) { return lat[(size_t)(p * (n - 1))]; };
-    std::printf("%zu ops in %.3fs -> %.0f ops/sec, %zu fills\n", n, secs, n / secs, fills);
+    std::sort(latencies.begin(), latencies.end());
+    auto percentile = [&](double fraction) { return latencies[(uint64_t)(fraction * (n - 1))]; };
+    std::printf("%llu ops in %.3fs -> %.0f ops/sec, %llu fills\n",
+                (unsigned long long)n, secs, n / secs, (unsigned long long)fills);
     std::printf("latency ns: p50 %lld  p99 %lld  p99.9 %lld  max %lld\n",
-                (long long)pct(0.50), (long long)pct(0.99), (long long)pct(0.999), (long long)lat.back());
+                (long long)percentile(0.50), (long long)percentile(0.99), (long long)percentile(0.999), (long long)latencies.back());
     // ponytail: per-op clock reads add ~20-40ns each; ops/sec includes that overhead
 }
 

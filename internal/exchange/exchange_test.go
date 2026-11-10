@@ -1,9 +1,16 @@
 package exchange
 
 import (
+	"bufio"
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -67,4 +74,101 @@ func TestRingProducerConsumer(t *testing.T) {
 			t.Fatalf("message %d out of order or torn: %+v", i, item)
 		}
 	}
+}
+
+// startEngine builds matching_engine.cpp and serves one throwaway symbol.
+func startEngine(t *testing.T) string {
+	if _, err := exec.LookPath("c++"); err != nil {
+		t.Skip("no C++ compiler")
+	}
+	engineBinary := filepath.Join(t.TempDir(), "me")
+	build := exec.Command("c++", "-std=c++17", "-O2", "-o", engineBinary, "../../engine/matching_engine.cpp")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build engine: %v\n%s", err, output)
+	}
+
+	symbol := fmt.Sprintf("TEST%d", os.Getpid())
+	engine := exec.Command(engineBinary, "--serve", symbol)
+	stdout, _ := engine.StdoutPipe()
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		engine.Process.Kill()
+		engine.Wait()
+		os.Remove(filepath.Join(RingDir, symbol+".in"))
+		os.Remove(filepath.Join(RingDir, symbol+".out"))
+	})
+
+	line, err := bufio.NewReader(stdout).ReadString('\n') // engine prints once both rings exist
+	if err != nil || !strings.Contains(line, "serving") {
+		t.Fatalf("engine didn't start: %q %v", line, err)
+	}
+	return symbol
+}
+
+func TestClientAgainstEngine(t *testing.T) {
+	client, err := Dial(startEngine(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	must := func(events []Event, err error) []Event {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return events
+	}
+
+	// sell 10 @ 100 rests
+	events := must(client.Submit(ctx, 1, false, 100, 10))
+	if len(events) != 1 || events[0].Type != EvAccepted || events[0].Qty != 10 {
+		t.Fatalf("rest: %+v", events)
+	}
+
+	// buy 4 @ 101 fills 4 @ 100 (maker's price), nothing rests
+	events = must(client.Submit(ctx, 2, true, 101, 4))
+	if len(events) != 2 {
+		t.Fatalf("fill: %+v", events)
+	}
+	fill := events[0]
+	if fill.Type != EvFill || fill.OrderID != 2 || fill.MakerID != 1 || fill.Price != 100 || fill.Qty != 4 {
+		t.Fatalf("fill event: %+v", fill)
+	}
+	if events[1].Type != EvAccepted || events[1].Qty != 0 {
+		t.Fatalf("fill terminal: %+v", events[1])
+	}
+
+	// cancel the 6 left on order 1, then again
+	events = must(client.Cancel(ctx, 1))
+	if len(events) != 1 || events[0].Type != EvCanceled || events[0].Qty != 6 {
+		t.Fatalf("cancel: %+v", events)
+	}
+	events = must(client.Cancel(ctx, 1))
+	if events[0].Type != EvRejected || events[0].Reason != ReasonUnknownOrder {
+		t.Fatalf("cancel twice: %+v", events)
+	}
+
+	// zero qty rejected
+	events = must(client.Submit(ctx, 3, true, 100, 0))
+	if events[0].Type != EvRejected || events[0].Reason != ReasonBadOrder {
+		t.Fatalf("bad order: %+v", events)
+	}
+
+	// many concurrent callers: each must get back the answer for its own order
+	var callers sync.WaitGroup
+	for i := range uint64(2000) {
+		callers.Add(1)
+		go func(id uint64) {
+			defer callers.Done()
+			events, err := client.Submit(ctx, id, true, 50, 1) // below any ask: rests
+			if err != nil || len(events) != 1 || events[0].OrderID != id || events[0].Type != EvAccepted {
+				t.Errorf("order %d got %+v %v", id, events, err)
+			}
+		}(1000 + i)
+	}
+	callers.Wait()
 }

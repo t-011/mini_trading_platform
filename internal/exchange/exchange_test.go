@@ -1,17 +1,15 @@
 package exchange
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/t-011/mini_trading_platform/internal/exchange/exchangetest"
 )
 
 // newRingFile makes an empty ring file the way the engine would: zeroed
@@ -76,39 +74,8 @@ func TestRingProducerConsumer(t *testing.T) {
 	}
 }
 
-// startEngine builds matching_engine.cpp and serves one throwaway symbol.
-func startEngine(t *testing.T) string {
-	if _, err := exec.LookPath("c++"); err != nil {
-		t.Skip("no C++ compiler")
-	}
-	engineBinary := filepath.Join(t.TempDir(), "me")
-	build := exec.Command("c++", "-std=c++17", "-O2", "-o", engineBinary, "../../engine/matching_engine.cpp")
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build engine: %v\n%s", err, output)
-	}
-
-	symbol := fmt.Sprintf("TEST%d", os.Getpid())
-	engine := exec.Command(engineBinary, "--serve", symbol)
-	stdout, _ := engine.StdoutPipe()
-	if err := engine.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		engine.Process.Kill()
-		engine.Wait()
-		os.Remove(filepath.Join(RingDir, symbol+".in"))
-		os.Remove(filepath.Join(RingDir, symbol+".out"))
-	})
-
-	line, err := bufio.NewReader(stdout).ReadString('\n') // engine prints once both rings exist
-	if err != nil || !strings.Contains(line, "serving") {
-		t.Fatalf("engine didn't start: %q %v", line, err)
-	}
-	return symbol
-}
-
 func TestClientAgainstEngine(t *testing.T) {
-	client, err := Dial(startEngine(t))
+	client, err := Dial(exchangetest.StartEngine(t, RingDir))
 	if err != nil {
 		t.Fatal(err)
 	}

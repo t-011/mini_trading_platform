@@ -19,7 +19,7 @@ type Holding struct {
 	Name        string
 	Qty         string
 	AvgCost     int64 // weighted-avg buy price per share, cents
-	LastClose   int64 // latest bar close, cents
+	LastClose   int64 // latest bar close (or last trade on our exchange), cents
 	MarketValue int64 // Qty * LastClose
 	CostBasis   int64 // Qty * AvgCost
 	Unrealized  int64 // MarketValue - CostBasis
@@ -63,8 +63,8 @@ func (s *Service) GetPortfolio(ctx context.Context, userID uuid.UUID) (Portfolio
 
 // deriveHolding turns a raw holdings row into per-position stats. Pure.
 // ponytail: float math like houseCost; qty/avg_cost are exact numeric strings
-// from the DB. LastClose is always present: holding a stock implies a buy,
-// which required a price (ErrNoPrice guards the trade).
+// from the DB. LastClose is always present: the latest bar close, or for our
+// own exchange's stocks the last trade price (a holding implies a trade).
 func deriveHolding(r database.GetHoldingsRow) Holding {
 	qty, _ := strconv.ParseFloat(r.Qty, 64)
 	avg, _ := strconv.ParseFloat(r.AvgCost, 64)

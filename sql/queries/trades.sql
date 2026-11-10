@@ -26,7 +26,12 @@ SELECT
     -- weighted-avg buy price, cents. ponytail: weighted-avg basis, not FIFO lots
     (SUM(t.qty * t.price) FILTER (WHERE t.type='buy')
         / NULLIF(SUM(t.qty) FILTER (WHERE t.type='buy'), 0))::numeric AS avg_cost,
-    lc.close AS last_close
+    -- latest bar close; our own exchange's stocks have no bars, so fall back
+    -- to their last trade price (a holding implies at least one trade)
+    COALESCE(lc.close, (
+        SELECT t2.price FROM trades t2
+        WHERE t2.stock_id = s.id ORDER BY t2.timestamp DESC LIMIT 1
+    ))::bigint AS last_close
 FROM trades t
 JOIN stocks s ON s.id = t.stock_id
 LEFT JOIN LATERAL (

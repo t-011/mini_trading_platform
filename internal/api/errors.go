@@ -23,7 +23,7 @@ func respondWithServiceError(w http.ResponseWriter, err error) {
 		respondWithError(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, users.ErrEmailTaken):
 		respondWithError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, trading.ErrNoPrice), errors.Is(err, trading.ErrTradeNotFound),
+	case errors.Is(err, trading.ErrTradeNotFound),
 		errors.Is(err, trading.ErrStockNotFound), errors.Is(err, trading.ErrOrderNotFound),
 		errors.Is(err, market.ErrStockNotFound):
 		respondWithError(w, http.StatusNotFound, err.Error())

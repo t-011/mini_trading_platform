@@ -1,6 +1,7 @@
 // Build:
 //   tests:   c++ -std=c++17 -g -fsanitize=address,undefined matching_engine.cpp -o me && ./me
 //   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
+//   serve:   c++ -std=c++17 -O2 matching_engine.cpp -o me && ./me --serve MINI [MORE...]
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -13,6 +14,11 @@
 #include <vector>
 #include <list>
 #include <unordered_map>
+#include <string>
+#include <thread>
+#include <sys/stat.h>
+
+#include "protocol.hpp"
 
 struct Order {
     uint64_t id;
@@ -99,6 +105,69 @@ struct Book {
         return removed;
     }
 };
+
+// --- serve: one thread per stock, each owning its Book and its two rings. ---
+
+// Spin briefly, then sleep, so an idle stock doesn't pin a whole core.
+void idle(int& spins) {
+    if (++spins < 1000) return;
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
+}
+
+void run_stock(const std::string& symbol) {
+    std::string base = std::string(RING_DIR) + "/" + symbol;
+    InRing* in = map_ring<InRing>((base + ".in").c_str(), true);
+    OutRing* out = map_ring<OutRing>((base + ".out").c_str(), true);
+    if (!in || !out) {
+        std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), RING_DIR);
+        std::exit(1);
+    }
+
+    Book book;
+    uint64_t seq = 0;
+    int spins = 0;
+
+    auto emit = [&](Event event) {
+        event.seq = ++seq;
+        int full_spins = 0;
+        while (!out->push(event)) idle(full_spins);  // ponytail: blocks the book if Go stops reading
+    };
+    auto reject = [&](uint64_t id, uint8_t reason) {
+        emit(Event{0, id, 0, 0, 0, EV_REJECTED, reason, {}});
+    };
+
+    std::printf("%s: serving on %s.{in,out}\n", symbol.c_str(), base.c_str());
+    std::fflush(stdout);
+
+    Request request;
+    while (true) {
+        if (!in->pop(request)) { idle(spins); continue; }
+        spins = 0;
+
+        if (request.type == REQ_NEW) {
+            if (request.qty <= 0 || request.price <= 0) { reject(request.order_id, R_BAD_ORDER); continue; }
+            Order order{request.order_id, request.is_buy == 1, request.qty};
+            for (const Fill& fill : book.submit(order, request.price))
+                emit(Event{0, fill.taker, fill.maker, fill.price, fill.qty, EV_FILL, R_NONE, {}});
+            auto rested = book.order_index.find(request.order_id);
+            int64_t resting = rested == book.order_index.end() ? 0 : rested->second.it->qty;
+            emit(Event{0, request.order_id, 0, request.price, resting, EV_ACCEPTED, R_NONE, {}});
+        } else if (request.type == REQ_CANCEL) {
+            int64_t removed = book.cancel(request.order_id);
+            if (removed == 0) reject(request.order_id, R_UNKNOWN_ORDER);
+            else emit(Event{0, request.order_id, 0, 0, removed, EV_CANCELED, R_NONE, {}});
+        } else {
+            reject(request.order_id, R_BAD_ORDER);
+        }
+    }
+}
+
+void serve(int count, char** symbols) {
+    mkdir(RING_DIR, 0700);  // EEXIST is fine
+    std::vector<std::thread> threads;
+    for (int index = 0; index < count; index++) threads.emplace_back(run_stock, std::string(symbols[index]));
+    for (auto& thread : threads) thread.join();
+}
 
 // --- tests: plain functions + assert. A failed assert aborts with file:line. ---
 
@@ -256,6 +325,10 @@ void bench(uint64_t n) {
 }
 
 int main(int argc, char** argv) {
+    if (argc > 2 && std::strcmp(argv[1], "--serve") == 0) {
+        serve(argc - 2, argv + 2);
+        return 0;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {
         bench(1'000'000);
         return 0;

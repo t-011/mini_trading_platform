@@ -29,6 +29,19 @@ type Bars1min struct {
 	Timestamp time.Time
 }
 
+type Order struct {
+	ID        int64
+	UserID    uuid.UUID
+	StockID   uuid.UUID
+	Side      string
+	Price     int64
+	Qty       int64
+	Filled    int64
+	Canceled  int64
+	Status    string
+	CreatedAt time.Time
+}
+
 type RefreshToken struct {
 	Token     string
 	CreatedAt time.Time

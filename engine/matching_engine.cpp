@@ -3,17 +3,15 @@
 //   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
 //   serve:   c++ -std=c++17 -O2 matching_engine.cpp -o me && ./me --serve MINI [MORE...]
 //
-// MINI_EXCHANGE_SPIN=1 busy-spins instead of sleeping when a ring is empty.
-// Use it only when the engine has its own core (compose `cpuset`): with one
-// stock that pins the whole process, so no affinity code is needed here.
-// ponytail: several stocks on several cores -> pthread_setaffinity_np per stock thread
+// Env:
+//   MINI_EXCHANGE_SPIN=1   busy-spin on empty rings. Only with a core to
+//                          ourselves (compose cpuset).
+//   MINI_EXCHANGE_DIR      rings dir, default /tmp/mini_exchange. <dir>/ready
+//                          exists while serving (compose healthcheck).
+//   MINI_EXCHANGE_WAL_DIR  WAL dir, default /tmp/mini_exchange_wal. Needs to
+//                          be on disk, not with the tmpfs rings.
 //
-// MINI_EXCHANGE_DIR sets where the rings live (default /tmp/mini_exchange).
-// Once every stock's rings exist the engine creates <dir>/ready (the compose
-// healthcheck); SIGTERM/SIGINT stop it cleanly and remove that file.
-//
-// MINI_EXCHANGE_WAL_DIR sets where the write-ahead logs live (default
-// /tmp/mini_exchange_wal). It has to be on disk, not with the (tmpfs) rings.
+// TODO: more stocks on more cores needs pthread_setaffinity_np per thread
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -124,12 +122,11 @@ struct Book {
     }
 };
 
-// --- serve: one thread per stock, each owning its Book and its two rings. ---
+// --- serve: one thread per stock, each with its own Book and rings ---
 
-bool busy_spin = false;  // set from MINI_EXCHANGE_SPIN in main
+bool busy_spin = false;
 
-// Tells the CPU we're in a spin-wait: saves power and frees the core's
-// pipeline for a hyperthread sibling. Costs a few ns.
+// pause/yield hint for spin loops
 inline void cpu_relax() {
 #if defined(__x86_64__)
     __builtin_ia32_pause();
@@ -138,9 +135,7 @@ inline void cpu_relax() {
 #endif
 }
 
-// Called while a ring is empty (or full).
-//   busy_spin: the core is ours, never sleep, lowest latency.
-//   otherwise: spin briefly, then sleep, so an idle stock doesn't hog a shared core.
+// Without busy_spin, sleep after a while so an idle stock doesn't hog a shared core.
 void idle(int& spins) {
     cpu_relax();
     if (busy_spin) return;
@@ -252,7 +247,7 @@ void run_stock(Stock* stock) {
 
 // Every book is replayed and every ring mapped before <dir>/ready is created.
 void serve(const std::string& ring_dir, const std::string& wal_dir, int count, char** symbols) {
-    mkdir(ring_dir.c_str(), 0700);  // EEXIST is fine
+    mkdir(ring_dir.c_str(), 0700);
     mkdir(wal_dir.c_str(), 0700);
     std::string ready = ring_dir + "/ready";
     unlink(ready.c_str());
@@ -307,7 +302,7 @@ void serve(const std::string& ring_dir, const std::string& wal_dir, int count, c
     std::printf("stopped\n");
 }
 
-// --- tests: plain functions + assert. A failed assert aborts with file:line. ---
+// --- tests ---
 
 void test_rests_when_book_empty() {
     Book book;
@@ -524,7 +519,7 @@ void bench(uint64_t n) {
                 (unsigned long long)n, secs, n / secs, (unsigned long long)fills);
     std::printf("latency ns: p50 %lld  p99 %lld  p99.9 %lld  max %lld\n",
                 (long long)percentile(0.50), (long long)percentile(0.99), (long long)percentile(0.999), (long long)latencies.back());
-    // ponytail: per-op clock reads add ~20-40ns each; ops/sec includes that overhead
+    // NOTE: the two clock reads per op add ~20-40ns, ops/sec includes that
 }
 
 int main(int argc, char** argv) {

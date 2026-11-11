@@ -58,11 +58,10 @@ R* map_ring(const char* path, bool create) {
         return nullptr;
     }
 
-    // MAP_SHARED: writes are visible to every process mapping this file.
     void* mem = mmap(nullptr, sizeof(R), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close(fd);  // the mapping keeps the file alive
+    close(fd);
     if (mem == MAP_FAILED) return nullptr;
 
-    if (create) return new (mem) R();  // construct in place: zeroes head/tail
-    return static_cast<R*>(mem);       // attach: never re-construct, it would reset the counters
+    if (create) return new (mem) R();
+    return static_cast<R*>(mem);  // don't construct again, it would reset head/tail
 }

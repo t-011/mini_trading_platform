@@ -1,0 +1,82 @@
+# Simulates the real setup: Postgres, the C++ engine (the exchange) on its own
+# core, and the Go API (the broker), sharing the shared-memory rings through
+# a RAM-backed (tmpfs) volume.
+#
+#   docker compose up --build        API on http://localhost:8099
+#
+# Needs JWT_SECRET (or JWT_KEY) in .env. Dev-only database credentials below.
+name: mini_trading_platform
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: trading
+      POSTGRES_PASSWORD: trading
+      POSTGRES_DB: trading
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trading -d trading"]
+      interval: 2s
+      retries: 15
+
+  migrate:
+    build:
+      context: .
+      target: migrate
+    environment:
+      DB_URL: postgres://trading:trading@postgres:5432/trading?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  engine:
+    build: engine
+    command: ["MINI"]
+    cpuset: "2"         # its own core; Docker Desktop's VM needs >= 3 CPUs
+    volumes:
+      - rings:/rings
+      - wal:/wal          # on disk: the books are rebuilt from it on restart
+    environment:
+      MINI_EXCHANGE_DIR: /rings
+      MINI_EXCHANGE_WAL_DIR: /wal
+      MINI_EXCHANGE_SPIN: "1" # busy-spin: that core shows ~100% CPU
+    healthcheck:
+      test: ["CMD", "test", "-f", "/rings/ready"]
+      interval: 1s
+      retries: 30
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      target: api
+    volumes:
+      - rings:/rings
+    environment:
+      DB_URL: postgres://trading:trading@postgres:5432/trading?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:-${JWT_KEY:?set JWT_SECRET in .env}}
+      MINI_EXCHANGE_DIR: /rings
+    ports:
+      - "8099:8080"
+    depends_on:
+      engine:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped # exits when the engine restarts, then dials the new rings
+
+volumes:
+  pgdata:
+  # The engine's write-ahead logs. Order ids come from Postgres, so wipe both
+  # together (`docker compose down -v`) or neither.
+  wal:
+  # The rings. A volume rather than the engine's /dev/shm: it stays mounted
+  # while the api uses it, so when the engine restarts and writes fresh ring
+  # files the api sees them (and restarts itself to attach).
+  rings:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=64m

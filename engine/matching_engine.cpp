@@ -145,6 +145,39 @@ std::atomic<bool> stopping{false};
 
 void request_stop(int) { stopping.store(true); }
 
+// Both live serving and WAL replay use this, so a replay ends up with the
+// same book.
+template <typename Emit>
+void handle(Book& book, const Request& request, Emit&& emit) {
+    auto reject = [&](uint8_t reason) {
+        emit(Event{0, request.order_id, 0, 0, 0, EV_REJECTED, reason, {}});
+    };
+
+    if (request.type == REQ_NEW) {
+        if (request.qty <= 0 || request.price <= 0) {
+            reject(R_BAD_ORDER);
+            return;
+        }
+
+        Order order{request.order_id, request.is_buy == 1, request.qty};
+
+        for (const Fill& fill : book.submit(order, request.price)) {
+            emit(Event{0, fill.taker, fill.maker, fill.price, fill.qty, EV_FILL, R_NONE, {}});
+        }
+
+        auto rested = book.order_index.find(request.order_id);
+        int64_t resting = rested == book.order_index.end() ? 0 : rested->second.it->qty;
+        emit(Event{0, request.order_id, 0, request.price, resting, EV_ACCEPTED, R_NONE, {}});
+
+    } else if (request.type == REQ_CANCEL) {
+        int64_t removed = book.cancel(request.order_id);
+        if (removed == 0) reject(R_UNKNOWN_ORDER);
+        else emit(Event{0, request.order_id, 0, 0, removed, EV_CANCELED, R_NONE, {}});
+    } else {
+        reject(R_BAD_ORDER);
+    }
+}
+
 struct StockRings {
     std::string symbol;
     InRing* in;
@@ -162,30 +195,12 @@ void run_stock(StockRings rings) {
         // NOTE: if Go stops reading, this stock stalls here
         while (!rings.out->push(event) && !stopping.load(std::memory_order_relaxed)) idle(full_spins);
     };
-    auto reject = [&](uint64_t id, uint8_t reason) {
-        emit(Event{0, id, 0, 0, 0, EV_REJECTED, reason, {}});
-    };
 
     Request request;
     while (!stopping.load(std::memory_order_relaxed)) {
         if (!rings.in->pop(request)) { idle(spins); continue; }
         spins = 0;
-
-        if (request.type == REQ_NEW) {
-            if (request.qty <= 0 || request.price <= 0) { reject(request.order_id, R_BAD_ORDER); continue; }
-            Order order{request.order_id, request.is_buy == 1, request.qty};
-            for (const Fill& fill : book.submit(order, request.price))
-                emit(Event{0, fill.taker, fill.maker, fill.price, fill.qty, EV_FILL, R_NONE, {}});
-            auto rested = book.order_index.find(request.order_id);
-            int64_t resting = rested == book.order_index.end() ? 0 : rested->second.it->qty;
-            emit(Event{0, request.order_id, 0, request.price, resting, EV_ACCEPTED, R_NONE, {}});
-        } else if (request.type == REQ_CANCEL) {
-            int64_t removed = book.cancel(request.order_id);
-            if (removed == 0) reject(request.order_id, R_UNKNOWN_ORDER);
-            else emit(Event{0, request.order_id, 0, 0, removed, EV_CANCELED, R_NONE, {}});
-        } else {
-            reject(request.order_id, R_BAD_ORDER);
-        }
+        handle(book, request, emit);
     }
 }
 

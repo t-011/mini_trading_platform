@@ -44,10 +44,12 @@ func (cfg *Config) createOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, struct {
+	type respBody struct {
 		Order  database.Order   `json:"order"`
 		Trades []database.Trade `json:"trades"`
-	}{Order: result.Order, Trades: result.Trades})
+	}
+
+	respondWithJSON(w, http.StatusCreated, respBody{Order: result.Order, Trades: result.Trades})
 }
 
 func (cfg *Config) listOrders(w http.ResponseWriter, r *http.Request) {
@@ -74,9 +76,11 @@ func (cfg *Config) listOrders(w http.ResponseWriter, r *http.Request) {
 		orders = []database.Order{} // serialize as [] not null
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Orders []database.Order `json:"orders"`
-	}{Orders: orders})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Orders: orders})
 }
 
 func (cfg *Config) cancelOrder(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +104,9 @@ func (cfg *Config) cancelOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Order database.Order `json:"order"`
-	}{Order: order})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Order: order})
 }

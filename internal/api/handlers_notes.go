@@ -29,9 +29,11 @@ func (cfg *Config) getNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Notes []database.TradeNote `json:"notes"`
-	}{Notes: notes})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Notes: notes})
 }
 
 func (cfg *Config) addNote(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +51,11 @@ func (cfg *Config) addNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var reqData struct {
+	type params struct {
 		Text string `json:"text"`
 	}
+
+	var reqData params
 	if err := json.NewDecoder(r.Body).Decode(&reqData); err != nil {
 		respondWithError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -63,7 +67,9 @@ func (cfg *Config) addNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusCreated, struct {
+	type respBody struct {
 		Note database.TradeNote `json:"note"`
-	}{Note: note})
+	}
+
+	respondWithJSON(w, http.StatusCreated, respBody{Note: note})
 }

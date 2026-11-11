@@ -22,10 +22,12 @@ func (cfg *Config) getPortfolio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Cash     int64             `json:"cash"`
 		Holdings []trading.Holding `json:"holdings"`
-	}{Cash: p.Cash, Holdings: p.Holdings})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Cash: p.Cash, Holdings: p.Holdings})
 }
 
 func (cfg *Config) getCash(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +45,11 @@ func (cfg *Config) getCash(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Cash int64 `json:"cash"`
-	}{Cash: cash})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Cash: cash})
 }
 
 func (cfg *Config) listTrades(w http.ResponseWriter, r *http.Request) {
@@ -72,7 +76,9 @@ func (cfg *Config) listTrades(w http.ResponseWriter, r *http.Request) {
 		trades = []database.Trade{} // serialize as [] not null
 	}
 
-	respondWithJSON(w, http.StatusOK, struct {
+	type respBody struct {
 		Trades []database.Trade `json:"trades"`
-	}{Trades: trades})
+	}
+
+	respondWithJSON(w, http.StatusOK, respBody{Trades: trades})
 }

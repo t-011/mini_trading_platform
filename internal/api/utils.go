@@ -6,7 +6,6 @@ import (
 	"net/http"
 )
 
-
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	_, _ = w.Write([]byte(fmt.Sprintf(`{"error": %q}`, msg)))

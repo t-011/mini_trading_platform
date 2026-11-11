@@ -31,7 +31,7 @@ func (cfg *Config) getBars(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Bars []database.GetBarsByIntervalRow `json:"bars"`
+		Bars []database.GetBarsByIntervalRow
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Bars: bars})

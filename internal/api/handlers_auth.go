@@ -8,8 +8,8 @@ import (
 )
 
 type authParams struct {
-	Password string `json:"password"`
-	Email    string `json:"email"`
+	Password string
+	Email    string
 }
 
 func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -28,17 +28,17 @@ func (cfg *Config) createUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Id         string `json:"id"`
-		Created_at string `json:"created_at"`
-		Updated_at string `json:"updated_at"`
-		Email      string `json:"email"`
+		ID        string
+		CreatedAt string
+		UpdatedAt string
+		Email     string
 	}
 
 	respondWithJSON(w, http.StatusCreated, respBody{
-		Id:         user.ID.String(),
-		Created_at: user.CreatedAt.String(),
-		Updated_at: user.UpdatedAt.String(),
-		Email:      user.Email,
+		ID:        user.ID.String(),
+		CreatedAt: user.CreatedAt.String(),
+		UpdatedAt: user.UpdatedAt.String(),
+		Email:     user.Email,
 	})
 }
 
@@ -58,18 +58,18 @@ func (cfg *Config) loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Id           string `json:"id"`
-		Created_at   string `json:"created_at"`
-		Updated_at   string `json:"updated_at"`
-		Email        string `json:"email"`
-		Token        string `json:"token"`
-		RefreshToken string `json:"refresh_token"`
+		ID           string
+		CreatedAt    string
+		UpdatedAt    string
+		Email        string
+		Token        string
+		RefreshToken string
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{
-		Id:           result.User.ID.String(),
-		Created_at:   result.User.CreatedAt.String(),
-		Updated_at:   result.User.UpdatedAt.String(),
+		ID:           result.User.ID.String(),
+		CreatedAt:    result.User.CreatedAt.String(),
+		UpdatedAt:    result.User.UpdatedAt.String(),
 		Email:        result.User.Email,
 		Token:        result.AccessToken,
 		RefreshToken: result.RefreshToken,
@@ -98,17 +98,17 @@ func (cfg *Config) updateUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Id         string `json:"id"`
-		Created_at string `json:"created_at"`
-		Updated_at string `json:"updated_at"`
-		Email      string `json:"email"`
+		ID        string
+		CreatedAt string
+		UpdatedAt string
+		Email     string
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{
-		Id:         user.ID.String(),
-		Created_at: user.CreatedAt.String(),
-		Updated_at: user.UpdatedAt.String(),
-		Email:      user.Email,
+		ID:        user.ID.String(),
+		CreatedAt: user.CreatedAt.String(),
+		UpdatedAt: user.UpdatedAt.String(),
+		Email:     user.Email,
 	})
 }
 
@@ -128,7 +128,7 @@ func (cfg *Config) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Token string `json:"token"`
+		Token string
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Token: accessToken})

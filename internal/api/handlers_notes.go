@@ -30,7 +30,7 @@ func (cfg *Config) getNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Notes []database.TradeNote `json:"notes"`
+		Notes []database.TradeNote
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Notes: notes})
@@ -52,7 +52,7 @@ func (cfg *Config) addNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type params struct {
-		Text string `json:"text"`
+		Text string
 	}
 
 	var reqData params
@@ -68,7 +68,7 @@ func (cfg *Config) addNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Note database.TradeNote `json:"note"`
+		Note database.TradeNote
 	}
 
 	respondWithJSON(w, http.StatusCreated, respBody{Note: note})

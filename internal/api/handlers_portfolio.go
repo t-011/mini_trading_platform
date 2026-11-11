@@ -23,8 +23,8 @@ func (cfg *Config) getPortfolio(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Cash     int64             `json:"cash"`
-		Holdings []trading.Holding `json:"holdings"`
+		Cash     int64
+		Holdings []trading.Holding
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Cash: p.Cash, Holdings: p.Holdings})
@@ -46,7 +46,7 @@ func (cfg *Config) getCash(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Cash int64 `json:"cash"`
+		Cash int64
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Cash: cash})
@@ -77,7 +77,7 @@ func (cfg *Config) listTrades(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Trades []database.Trade `json:"trades"`
+		Trades []database.Trade
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Trades: trades})

@@ -12,10 +12,10 @@ import (
 
 func (cfg *Config) createOrder(w http.ResponseWriter, r *http.Request) {
 	type params struct {
-		StockID  uuid.UUID `json:"stock_id"`
-		Side     string    `json:"side"`
-		Quantity string    `json:"quantity"` // whole shares
-		Price    int64     `json:"price"`    // limit, cents
+		StockID  uuid.UUID
+		Side     string
+		Quantity string // whole shares
+		Price    int64  // limit, cents
 	}
 
 	w.Header().Set("Content-type", "application/json")
@@ -45,8 +45,8 @@ func (cfg *Config) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Order  database.Order   `json:"order"`
-		Trades []database.Trade `json:"trades"`
+		Order  database.Order
+		Trades []database.Trade
 	}
 
 	respondWithJSON(w, http.StatusCreated, respBody{Order: result.Order, Trades: result.Trades})
@@ -77,7 +77,7 @@ func (cfg *Config) listOrders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Orders []database.Order `json:"orders"`
+		Orders []database.Order
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Orders: orders})
@@ -105,7 +105,7 @@ func (cfg *Config) cancelOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Order database.Order `json:"order"`
+		Order database.Order
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Order: order})

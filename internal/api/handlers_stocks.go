@@ -34,7 +34,7 @@ func (cfg *Config) getStocks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Stocks []database.Stock `json:"stocks"`
+		Stocks []database.Stock
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Stocks: stocks})
@@ -57,7 +57,7 @@ func (cfg *Config) getStock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type respBody struct {
-		Stock database.Stock `json:"stock"`
+		Stock database.Stock
 	}
 
 	respondWithJSON(w, http.StatusOK, respBody{Stock: stock})

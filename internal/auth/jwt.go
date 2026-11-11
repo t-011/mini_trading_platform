@@ -37,8 +37,11 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 			return []byte(tokenSecret), nil
 		},
 	)
-	if err != nil || !token.Valid {
+	if err != nil {
 		return uuid.Nil, err
+	}
+	if !token.Valid {
+		return uuid.Nil, errors.New("invalid token")
 	}
 
 	sub, ok := claims["sub"].(string)

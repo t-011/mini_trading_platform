@@ -2,7 +2,7 @@
 // The Go <-> engine contract. Go mirrors every byte of this in
 // internal/exchange/protocol.go: change one, change the other.
 //
-// Each stock has two rings in /tmp/mini_exchange/:
+// Each stock has two rings in the ring dir (default /tmp/mini_exchange/):
 //   <SYMBOL>.in   Go -> engine   (Request)
 //   <SYMBOL>.out  engine -> Go   (Event)
 // The ring itself identifies the stock, so messages carry no symbol.
@@ -52,4 +52,5 @@ using OutRing = RingBuffer<Event, RING_SLOTS>;
 static_assert(sizeof(InRing) == 2 * CACHE_LINE + RING_SLOTS * sizeof(Request));
 static_assert(sizeof(OutRing) == 2 * CACHE_LINE + RING_SLOTS * sizeof(Event));
 
-constexpr const char* RING_DIR = "/tmp/mini_exchange";
+// MINI_EXCHANGE_DIR overrides it (compose uses /rings).
+constexpr const char* DEFAULT_RING_DIR = "/tmp/mini_exchange";

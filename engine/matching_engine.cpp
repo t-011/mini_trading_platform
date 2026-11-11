@@ -7,6 +7,8 @@
 // Use it only when the engine has its own core (compose `cpuset`): with one
 // stock that pins the whole process, so no affinity code is needed here.
 // ponytail: several stocks on several cores -> pthread_setaffinity_np per stock thread
+//
+// MINI_EXCHANGE_DIR sets where the rings live (default /tmp/mini_exchange).
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -136,12 +138,12 @@ void idle(int& spins) {
     std::this_thread::sleep_for(std::chrono::microseconds(50));
 }
 
-void run_stock(const std::string& symbol) {
-    std::string base = std::string(RING_DIR) + "/" + symbol;
+void run_stock(const std::string& ring_dir, const std::string& symbol) {
+    std::string base = ring_dir + "/" + symbol;
     InRing* in = map_ring<InRing>((base + ".in").c_str(), true);
     OutRing* out = map_ring<OutRing>((base + ".out").c_str(), true);
     if (!in || !out) {
-        std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), RING_DIR);
+        std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), ring_dir.c_str());
         std::exit(1);
     }
 
@@ -184,10 +186,10 @@ void run_stock(const std::string& symbol) {
     }
 }
 
-void serve(int count, char** symbols) {
-    mkdir(RING_DIR, 0700);  // EEXIST is fine
+void serve(const std::string& ring_dir, int count, char** symbols) {
+    mkdir(ring_dir.c_str(), 0700);  // EEXIST is fine
     std::vector<std::thread> threads;
-    for (int index = 0; index < count; index++) threads.emplace_back(run_stock, std::string(symbols[index]));
+    for (int index = 0; index < count; index++) threads.emplace_back(run_stock, ring_dir, std::string(symbols[index]));
     for (auto& thread : threads) thread.join();
 }
 
@@ -350,7 +352,8 @@ int main(int argc, char** argv) {
     if (argc > 2 && std::strcmp(argv[1], "--serve") == 0) {
         const char* spin = std::getenv("MINI_EXCHANGE_SPIN");
         busy_spin = spin && std::strcmp(spin, "1") == 0;
-        serve(argc - 2, argv + 2);
+        const char* dir = std::getenv("MINI_EXCHANGE_DIR");
+        serve(dir && *dir ? dir : DEFAULT_RING_DIR, argc - 2, argv + 2);
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {

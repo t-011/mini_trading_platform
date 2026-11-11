@@ -30,6 +30,7 @@ func StartEngine(t *testing.T, ringDir string) string {
 
 	symbol := fmt.Sprintf("TEST%d", os.Getpid())
 	engine := exec.Command(engineBinary, "--serve", symbol)
+	engine.Env = append(os.Environ(), "MINI_EXCHANGE_DIR="+ringDir)
 	stdout, _ := engine.StdoutPipe()
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)

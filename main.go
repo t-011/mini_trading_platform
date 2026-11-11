@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof on http.DefaultServeMux only
 	"os"
 	"time"
 
@@ -53,6 +54,12 @@ func main() {
 		Users:   users.New(queries, db, jwtSecret),
 		Market:  market.New(queries),
 		Trading: trading.New(queries, db, exchanges),
+	}
+
+	// Profiling on its own port, off unless PPROF_ADDR is set. The API uses
+	// its own mux, so /debug/pprof never shows up on the public port.
+	if pprofAddr := os.Getenv("PPROF_ADDR"); pprofAddr != "" {
+		go func() { log.Println(http.ListenAndServe(pprofAddr, nil)) }()
 	}
 
 	port := os.Getenv("PORT")

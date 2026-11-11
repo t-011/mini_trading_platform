@@ -58,8 +58,10 @@ services:
       DB_URL: postgres://trading:trading@postgres:5432/trading?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:-${JWT_KEY:?set JWT_SECRET in .env}}
       MINI_EXCHANGE_DIR: /rings
+      PPROF_ADDR: ":6060"
     ports:
       - "8099:8080"
+      - "127.0.0.1:6060:6060" # pprof, localhost only
     depends_on:
       engine:
         condition: service_healthy

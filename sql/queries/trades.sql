@@ -23,7 +23,7 @@ SELECT * FROM trades
 SELECT
     s.id AS stock_id, s.symbol, s.name,
     SUM(CASE WHEN t.type='buy' THEN t.qty ELSE -t.qty END)::numeric AS qty,
-    -- weighted-avg buy price, cents. ponytail: weighted-avg basis, not FIFO lots
+    -- average buy price in cents (weighted average, not FIFO lots)
     (SUM(t.qty * t.price) FILTER (WHERE t.type='buy')
         / NULLIF(SUM(t.qty) FILTER (WHERE t.type='buy'), 0))::numeric AS avg_cost,
     -- latest bar close; our own exchange's stocks have no bars, so fall back

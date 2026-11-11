@@ -71,7 +71,7 @@ func (s *Service) PlaceOrder(ctx context.Context, in PlaceOrderInput) (OrderResu
 	defer cancel()
 	events, err := client.Submit(engineCtx, uint64(order.ID), in.Side == "buy", in.Price, shares*unitsPerShare)
 	if err != nil {
-		// ponytail: the order stays open with its reservation held; reconcile against the engine once the WAL exists
+		// TODO: the order stays open with its reservation held until we reconcile with the engine
 		return OrderResult{}, fmt.Errorf("submit order %d: %w", order.ID, err)
 	}
 	return s.applyAnswer(engineCtx, order, events)
@@ -215,7 +215,7 @@ func (s *Service) reserveAndRecord(ctx context.Context, in PlaceOrderInput, shar
 // applyMu serializes these: answers touch other users' orders and accounts
 // (the makers), and two transactions locking those rows in different orders
 // would deadlock.
-// ponytail: one lock for every stock, per-stock locks if throughput ever matters
+// NOTE: one lock for all stocks, could be per stock
 func (s *Service) applyAnswer(ctx context.Context, order database.Order, events []exchange.Event) (OrderResult, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()

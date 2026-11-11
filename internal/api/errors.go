@@ -10,9 +10,8 @@ import (
 	"github.com/t-011/mini_trading_platform/internal/users"
 )
 
-// respondWithServiceError maps a domain sentinel error to an HTTP status.
-// This is the single place HTTP status is decided for service failures;
-// unknown errors are logged and collapsed to a generic 500.
+// respondWithServiceError maps service errors to HTTP statuses. Anything
+// unknown is logged and returned as a 500.
 func respondWithServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, trading.ErrBadSide), errors.Is(err, trading.ErrBadQuantity),

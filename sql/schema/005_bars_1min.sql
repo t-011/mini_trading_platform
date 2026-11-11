@@ -6,7 +6,7 @@ CREATE TABLE bars_1min(
     high   BIGINT NOT NULL,
     low    BIGINT NOT NULL,
     close  BIGINT NOT NULL,
-    volume BIGINT NOT NULL,   -- share count (not money — just an int)
+    volume BIGINT NOT NULL,   -- share count (not money, just an int)
     timestamp TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE,
     UNIQUE (stock_id, timestamp)

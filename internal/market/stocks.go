@@ -18,7 +18,7 @@ func (s *Service) ListStocks(ctx context.Context, search string, limit, offset i
 	})
 }
 
-// GetStock returns a single stock by id, mapping "no row" to ErrStockNotFound.
+// GetStock returns ErrStockNotFound if there's no such stock.
 func (s *Service) GetStock(ctx context.Context, id uuid.UUID) (database.Stock, error) {
 	stock, err := s.db.GetStockById(ctx, id)
 	if err == sql.ErrNoRows {

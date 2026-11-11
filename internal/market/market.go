@@ -1,5 +1,4 @@
-// Package market holds reference-data and market-data reads: the stock
-// catalog and aggregated price bars. Read-only; depends only on the store.
+// Package market reads stocks and price bars.
 package market
 
 import "github.com/t-011/mini_trading_platform/internal/database"

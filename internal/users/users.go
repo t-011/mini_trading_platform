@@ -1,6 +1,4 @@
-// Package users holds the account/auth domain: signup (user + cash account in
-// one tx), login, profile update, and refresh-token lifecycle. Token minting
-// lives here; token validation for requests stays in the api middleware.
+// Package users handles signup, login and refresh tokens.
 package users
 
 import (

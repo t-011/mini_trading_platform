@@ -1,6 +1,4 @@
-// Package trading holds the trade/account/portfolio domain logic: order
-// placement on our exchange, cash movement, and position guards. It depends only on the
-// store (internal/database) and knows nothing about HTTP.
+// Package trading handles orders, cash and portfolios.
 package trading
 
 import (

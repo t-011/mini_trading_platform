@@ -42,8 +42,8 @@ func (s *Service) ListTrades(ctx context.Context, userID uuid.UUID, limit, offse
 	})
 }
 
-// GetPortfolio returns derived holdings plus cash. Reads are two queries, not a
-// single-instant snapshot — see plan; add a read-only tx only if it ever bites.
+// GetPortfolio returns holdings plus cash.
+// NOTE: two separate queries, not one snapshot. Use a read-only tx if that matters.
 func (s *Service) GetPortfolio(ctx context.Context, userID uuid.UUID) (Portfolio, error) {
 	rows, err := s.db.GetHoldings(ctx, userID)
 	if err != nil {
@@ -61,10 +61,8 @@ func (s *Service) GetPortfolio(ctx context.Context, userID uuid.UUID) (Portfolio
 	return Portfolio{Cash: cash, Holdings: holdings}, nil
 }
 
-// deriveHolding turns a raw holdings row into per-position stats. Pure.
-// ponytail: float math like houseCost; qty/avg_cost are exact numeric strings
-// from the DB. LastClose is always present: the latest bar close, or for our
-// own exchange's stocks the last trade price (a holding implies a trade).
+// NOTE: float math on the exact numeric strings from the DB. LastClose is the
+// latest bar close, or the last trade price for our own exchange's stocks.
 func deriveHolding(r database.GetHoldingsRow) Holding {
 	qty, _ := strconv.ParseFloat(r.Qty, 64)
 	avg, _ := strconv.ParseFloat(r.AvgCost, 64)

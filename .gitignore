@@ -15,5 +15,7 @@
 coverage.*
 
 *.md
+!README.md
+!docs/*.md
 
 me

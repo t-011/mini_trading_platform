@@ -1,5 +1,7 @@
 # mini_trading_platform
 
+[![CI](https://github.com/t-011/mini_trading_platform/actions/workflows/ci.yml/badge.svg)](https://github.com/t-011/mini_trading_platform/actions/workflows/ci.yml)
+
 A small stock trading platform with its own exchange. A Go API acts as the broker: it handles accounts, cash, risk checks and Postgres. A C++ matching engine acts as the exchange. The two talk over lock-free ring buffers in shared memory.
 
 ```mermaid

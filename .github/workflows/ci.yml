@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests (ASan + UBSan)
+        run: c++ -std=c++17 -Wall -Wextra -Werror -g -fsanitize=address,undefined matching_engine_test.cpp -o me.test && ./me.test
+      - name: Build the server
+        run: c++ -std=c++17 -Wall -Wextra -Werror -O2 matching_engine.cpp -o me
+
+  go:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: trading
+          POSTGRES_PASSWORD: trading
+          POSTGRES_DB: trading
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trading -d trading"
+          --health-interval 2s
+          --health-retries 15
+    env:
+      DB_URL: postgres://trading:trading@localhost:5432/trading?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Migrate
+        run: go run github.com/pressly/goose/v3/cmd/goose@v3.29.0 -dir sql/schema postgres "$DB_URL" up
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      # The exchange and trading tests build the C++ engine and run it.
+      - name: Tests
+        run: go test -race -count=1 ./...

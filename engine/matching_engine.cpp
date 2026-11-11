@@ -9,8 +9,11 @@
 // ponytail: several stocks on several cores -> pthread_setaffinity_np per stock thread
 //
 // MINI_EXCHANGE_DIR sets where the rings live (default /tmp/mini_exchange).
+// Once every stock's rings exist the engine creates <dir>/ready (the compose
+// healthcheck); SIGTERM/SIGINT stop it cleanly and remove that file.
 #include <algorithm>
 #include <cassert>
+#include <csignal>
 #include <cstdint>
 #include <chrono>
 #include <cstdio>
@@ -138,15 +141,17 @@ void idle(int& spins) {
     std::this_thread::sleep_for(std::chrono::microseconds(50));
 }
 
-void run_stock(const std::string& ring_dir, const std::string& symbol) {
-    std::string base = ring_dir + "/" + symbol;
-    InRing* in = map_ring<InRing>((base + ".in").c_str(), true);
-    OutRing* out = map_ring<OutRing>((base + ".out").c_str(), true);
-    if (!in || !out) {
-        std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), ring_dir.c_str());
-        std::exit(1);
-    }
+std::atomic<bool> stopping{false};
 
+void request_stop(int) { stopping.store(true); }
+
+struct StockRings {
+    std::string symbol;
+    InRing* in;
+    OutRing* out;
+};
+
+void run_stock(StockRings rings) {
     Book book;
     uint64_t seq = 0;
     int spins = 0;
@@ -154,18 +159,16 @@ void run_stock(const std::string& ring_dir, const std::string& symbol) {
     auto emit = [&](Event event) {
         event.seq = ++seq;
         int full_spins = 0;
-        while (!out->push(event)) idle(full_spins);  // ponytail: blocks the book if Go stops reading
+        // NOTE: if Go stops reading, this stock stalls here
+        while (!rings.out->push(event) && !stopping.load(std::memory_order_relaxed)) idle(full_spins);
     };
     auto reject = [&](uint64_t id, uint8_t reason) {
         emit(Event{0, id, 0, 0, 0, EV_REJECTED, reason, {}});
     };
 
-    std::printf("%s: serving on %s.{in,out}%s\n", symbol.c_str(), base.c_str(), busy_spin ? " (busy-spin)" : "");
-    std::fflush(stdout);
-
     Request request;
-    while (true) {
-        if (!in->pop(request)) { idle(spins); continue; }
+    while (!stopping.load(std::memory_order_relaxed)) {
+        if (!rings.in->pop(request)) { idle(spins); continue; }
         spins = 0;
 
         if (request.type == REQ_NEW) {
@@ -186,11 +189,45 @@ void run_stock(const std::string& ring_dir, const std::string& symbol) {
     }
 }
 
+// Every ring is mapped before <dir>/ready is created.
 void serve(const std::string& ring_dir, int count, char** symbols) {
     mkdir(ring_dir.c_str(), 0700);  // EEXIST is fine
+    std::string ready = ring_dir + "/ready";
+    unlink(ready.c_str());
+
+    std::vector<StockRings> stocks;
+    for (int index = 0; index < count; index++) {
+        std::string symbol = symbols[index];
+        std::string base = ring_dir + "/" + symbol;
+        // New files instead of truncating: a Go process still mapping the old
+        // ones would SIGBUS on a truncated file.
+        unlink((base + ".in").c_str());
+        unlink((base + ".out").c_str());
+        StockRings rings{symbol, map_ring<InRing>((base + ".in").c_str(), true),
+                         map_ring<OutRing>((base + ".out").c_str(), true)};
+        if (!rings.in || !rings.out) {
+            std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), ring_dir.c_str());
+            std::exit(1);
+        }
+        std::printf("%s: serving on %s.{in,out}%s\n", symbol.c_str(), base.c_str(), busy_spin ? " (busy-spin)" : "");
+        stocks.push_back(rings);
+    }
+
+    struct sigaction on_stop {};
+    on_stop.sa_handler = request_stop;
+    sigaction(SIGTERM, &on_stop, nullptr);
+    sigaction(SIGINT, &on_stop, nullptr);
+
     std::vector<std::thread> threads;
-    for (int index = 0; index < count; index++) threads.emplace_back(run_stock, ring_dir, std::string(symbols[index]));
+    for (const StockRings& rings : stocks) threads.emplace_back(run_stock, rings);
+
+    close(open(ready.c_str(), O_CREAT | O_WRONLY, 0600));
+    std::printf("ready\n");
+    std::fflush(stdout);
+
     for (auto& thread : threads) thread.join();
+    unlink(ready.c_str());
+    std::printf("stopped\n");
 }
 
 // --- tests: plain functions + assert. A failed assert aborts with file:line. ---

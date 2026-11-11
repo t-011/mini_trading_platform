@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -42,9 +41,13 @@ func StartEngine(t *testing.T, ringDir string) string {
 		os.Remove(filepath.Join(ringDir, symbol+".out"))
 	})
 
-	line, err := bufio.NewReader(stdout).ReadString('\n') // engine prints once both rings exist
-	if err != nil || !strings.Contains(line, "serving") {
-		t.Fatalf("engine didn't start: %q %v", line, err)
+	// the engine prints "ready" once its rings exist and its threads run
+	lines := bufio.NewScanner(stdout)
+	for lines.Scan() {
+		if lines.Text() == "ready" {
+			return symbol
+		}
 	}
-	return symbol
+	t.Fatalf("engine exited before it was ready: %v", lines.Err())
+	return ""
 }

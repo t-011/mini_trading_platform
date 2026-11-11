@@ -11,6 +11,9 @@
 // MINI_EXCHANGE_DIR sets where the rings live (default /tmp/mini_exchange).
 // Once every stock's rings exist the engine creates <dir>/ready (the compose
 // healthcheck); SIGTERM/SIGINT stop it cleanly and remove that file.
+//
+// MINI_EXCHANGE_WAL_DIR sets where the write-ahead logs live (default
+// /tmp/mini_exchange_wal). It has to be on disk, not with the (tmpfs) rings.
 #include <algorithm>
 #include <cassert>
 #include <csignal>
@@ -26,8 +29,11 @@
 #include <list>
 #include <unordered_map>
 #include <string>
+#include <memory>
 #include <thread>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "protocol.hpp"
 
@@ -178,14 +184,47 @@ void handle(Book& book, const Request& request, Emit&& emit) {
     }
 }
 
-struct StockRings {
+// --- WAL: raw Requests, appended before they're handled ---
+
+int open_wal(const std::string& path) {
+    return open(path.c_str(), O_RDWR | O_CREAT | O_APPEND, 0600);
+}
+
+// No events are sent during replay, Go already got them. A partial last
+// record (crash mid-write) was never handled, so it gets truncated.
+uint64_t replay_wal(int wal, Book& book) {
+    struct stat info;
+    if (fstat(wal, &info) != 0) return 0;
+    off_t whole = info.st_size - info.st_size % (off_t)sizeof(Request);
+    if (whole != info.st_size && ftruncate(wal, whole) != 0) {
+        std::perror("wal: truncate partial record");
+        std::exit(1);
+    }
+
+    uint64_t count = 0;
+    Request request;
+    // TODO: read in chunks if replay gets slow
+    while (pread(wal, &request, sizeof request, (off_t)(count * sizeof request)) == sizeof request) {
+        handle(book, request, [](const Event&) {});
+        count++;
+    }
+    return count;
+}
+
+// NOTE: no fsync. Survives the engine crashing, not the machine going down.
+bool append_wal(int wal, const Request& request) {
+    return write(wal, &request, sizeof request) == sizeof request;
+}
+
+struct Stock {
     std::string symbol;
     InRing* in;
     OutRing* out;
+    int wal;
+    std::unique_ptr<Book> book;
 };
 
-void run_stock(StockRings rings) {
-    Book book;
+void run_stock(Stock* stock) {
     uint64_t seq = 0;
     int spins = 0;
 
@@ -193,39 +232,57 @@ void run_stock(StockRings rings) {
         event.seq = ++seq;
         int full_spins = 0;
         // NOTE: if Go stops reading, this stock stalls here
-        while (!rings.out->push(event) && !stopping.load(std::memory_order_relaxed)) idle(full_spins);
+        while (!stock->out->push(event) && !stopping.load(std::memory_order_relaxed)) idle(full_spins);
     };
 
     Request request;
     while (!stopping.load(std::memory_order_relaxed)) {
-        if (!rings.in->pop(request)) { idle(spins); continue; }
+        if (!stock->in->pop(request)) { idle(spins); continue; }
         spins = 0;
-        handle(book, request, emit);
+
+        // log first: a request missing from the WAL would be lost on replay
+        if (!append_wal(stock->wal, request)) {
+            std::perror((stock->symbol + ": wal write").c_str());
+            std::_Exit(1);
+        }
+        handle(*stock->book, request, emit);
     }
 }
 
-// Every ring is mapped before <dir>/ready is created.
-void serve(const std::string& ring_dir, int count, char** symbols) {
+// Every book is replayed and every ring mapped before <dir>/ready is created.
+void serve(const std::string& ring_dir, const std::string& wal_dir, int count, char** symbols) {
     mkdir(ring_dir.c_str(), 0700);  // EEXIST is fine
+    mkdir(wal_dir.c_str(), 0700);
     std::string ready = ring_dir + "/ready";
     unlink(ready.c_str());
 
-    std::vector<StockRings> stocks;
+    std::vector<Stock> stocks;
     for (int index = 0; index < count; index++) {
         std::string symbol = symbols[index];
+
+        std::string wal_path = wal_dir + "/" + symbol + ".wal";
+        int wal = open_wal(wal_path);
+        if (wal < 0) {
+            std::perror(("can't open " + wal_path).c_str());
+            std::exit(1);
+        }
+        auto book = std::make_unique<Book>();
+        uint64_t replayed = replay_wal(wal, *book);
+        std::printf("%s: replayed %llu requests from %s\n", symbol.c_str(), (unsigned long long)replayed, wal_path.c_str());
+
         std::string base = ring_dir + "/" + symbol;
         // New files instead of truncating: a Go process still mapping the old
         // ones would SIGBUS on a truncated file.
         unlink((base + ".in").c_str());
         unlink((base + ".out").c_str());
-        StockRings rings{symbol, map_ring<InRing>((base + ".in").c_str(), true),
-                         map_ring<OutRing>((base + ".out").c_str(), true)};
-        if (!rings.in || !rings.out) {
+        InRing* in = map_ring<InRing>((base + ".in").c_str(), true);
+        OutRing* out = map_ring<OutRing>((base + ".out").c_str(), true);
+        if (!in || !out) {
             std::fprintf(stderr, "%s: can't map rings in %s\n", symbol.c_str(), ring_dir.c_str());
             std::exit(1);
         }
         std::printf("%s: serving on %s.{in,out}%s\n", symbol.c_str(), base.c_str(), busy_spin ? " (busy-spin)" : "");
-        stocks.push_back(rings);
+        stocks.push_back(Stock{symbol, in, out, wal, std::move(book)});
     }
 
     struct sigaction on_stop {};
@@ -234,13 +291,17 @@ void serve(const std::string& ring_dir, int count, char** symbols) {
     sigaction(SIGINT, &on_stop, nullptr);
 
     std::vector<std::thread> threads;
-    for (const StockRings& rings : stocks) threads.emplace_back(run_stock, rings);
+    for (Stock& stock : stocks) threads.emplace_back(run_stock, &stock);
 
     close(open(ready.c_str(), O_CREAT | O_WRONLY, 0600));
     std::printf("ready\n");
     std::fflush(stdout);
 
     for (auto& thread : threads) thread.join();
+    for (Stock& stock : stocks) {
+        fsync(stock.wal);
+        close(stock.wal);
+    }
     unlink(ready.c_str());
     std::printf("stopped\n");
 }
@@ -405,7 +466,9 @@ int main(int argc, char** argv) {
         const char* spin = std::getenv("MINI_EXCHANGE_SPIN");
         busy_spin = spin && std::strcmp(spin, "1") == 0;
         const char* dir = std::getenv("MINI_EXCHANGE_DIR");
-        serve(dir && *dir ? dir : DEFAULT_RING_DIR, argc - 2, argv + 2);
+        const char* wal_dir = std::getenv("MINI_EXCHANGE_WAL_DIR");
+        serve(dir && *dir ? dir : DEFAULT_RING_DIR,
+              wal_dir && *wal_dir ? wal_dir : "/tmp/mini_exchange_wal", argc - 2, argv + 2);
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--bench") == 0) {

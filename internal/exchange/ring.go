@@ -10,13 +10,14 @@ import (
 	"unsafe"
 )
 
-// Ring is the Go end of a RingBuffer<T, RING_SLOTS> (engine/ring_buffer.hpp) living
-// in a shared file mapping. Single producer, single consumer: on a given ring
-// Go only ever calls Push (the .in ring) or only Pop (the .out ring).
+// Ring is the Go side of RingBuffer in engine/ring_buffer.hpp. Go only
+// pushes to the .in ring and only pops from the .out ring.
 type Ring[T any] struct {
-	head  *uint64 // next slot to write; only the producer stores it
-	tail  *uint64 // next slot to read; only the consumer stores it
+	head  *uint64
+	tail  *uint64
 	slots []T
+	path  string
+	inode uint64 // at attach time, to notice the engine replacing the file
 }
 
 // attach maps a ring file the engine already created.
@@ -28,7 +29,7 @@ func attach[T any](path string) (*Ring[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close() // the mapping outlives the descriptor
+	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
@@ -47,10 +48,19 @@ func attach[T any](path string) (*Ring[T], error) {
 		head:  (*uint64)(unsafe.Pointer(&memory[0])),
 		tail:  (*uint64)(unsafe.Pointer(&memory[cacheLine])),
 		slots: unsafe.Slice((*T)(unsafe.Pointer(&memory[2*cacheLine])), ringSlots),
+		path:  path,
+		inode: info.Sys().(*syscall.Stat_t).Ino,
 	}, nil
 }
 
-// Push is the producer side. False means full; the caller retries.
+// replaced reports whether a restarted engine created a new file at path.
+// A missing file (engine not back yet) doesn't count.
+func (ring *Ring[T]) replaced() bool {
+	info, err := os.Stat(ring.path)
+	return err == nil && info.Sys().(*syscall.Stat_t).Ino != ring.inode
+}
+
+// Push returns false if the ring is full.
 func (ring *Ring[T]) Push(item T) bool {
 	head := atomic.LoadUint64(ring.head)
 	nextHead := (head + 1) & (ringSlots - 1)
@@ -58,11 +68,11 @@ func (ring *Ring[T]) Push(item T) bool {
 		return false
 	}
 	ring.slots[head] = item
-	atomic.StoreUint64(ring.head, nextHead) // publishes the slot write
+	atomic.StoreUint64(ring.head, nextHead)
 	return true
 }
 
-// Pop is the consumer side. False means empty.
+// Pop returns false if the ring is empty.
 func (ring *Ring[T]) Pop() (T, bool) {
 	var item T
 	tail := atomic.LoadUint64(ring.tail)
@@ -70,12 +80,11 @@ func (ring *Ring[T]) Pop() (T, bool) {
 		return item, false
 	}
 	item = ring.slots[tail]
-	atomic.StoreUint64(ring.tail, (tail+1)&(ringSlots-1)) // frees the slot
+	atomic.StoreUint64(ring.tail, (tail+1)&(ringSlots-1))
 	return item, true
 }
 
-// idle backs off while a ring is empty or full: yield first, then sleep,
-// so a quiet stock doesn't pin a core.
+// idle yields for a while, then sleeps, so a quiet stock doesn't eat a core.
 func idle(spins *int) {
 	*spins++
 	if *spins < 100 {

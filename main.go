@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -33,11 +34,12 @@ func main() {
 
 	queries := database.New(db)
 
-	// Our exchange's stocks; the engine must already be serving them
-	// (engine/me --serve MINI). Without it the rest of the API still works.
+	// Our exchange's stocks, served by engine/me --serve MINI. Retry for a bit
+	// in case the engine is still starting (e.g. both restarting under
+	// compose); without it the rest of the API still works.
 	exchanges := map[string]*exchange.Client{}
 	for _, symbol := range []string{"MINI"} {
-		client, err := exchange.Dial(symbol)
+		client, err := dialWithRetry(symbol, 10*time.Second)
 		if err != nil {
 			log.Printf("exchange: %s unavailable, its orders are disabled: %v", symbol, err)
 			continue
@@ -64,5 +66,16 @@ func main() {
 
 	if err := server.ListenAndServe(); err != nil {
 		fmt.Println("Error:", err)
+	}
+}
+
+func dialWithRetry(symbol string, wait time.Duration) (*exchange.Client, error) {
+	deadline := time.Now().Add(wait)
+	for {
+		client, err := exchange.Dial(symbol)
+		if err == nil || time.Now().After(deadline) {
+			return client, err
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }

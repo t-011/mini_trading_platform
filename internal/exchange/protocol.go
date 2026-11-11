@@ -1,14 +1,25 @@
-// Package exchange talks to the C++ matching engine (engine/matching_engine.cpp)
-// over shared-memory rings. Every type here mirrors engine/protocol.hpp byte for
-// byte: change one, change the other.
+// Package exchange talks to the C++ engine over shared-memory rings.
+// The types mirror engine/protocol.hpp.
 package exchange
 
-import "unsafe"
+import (
+	"os"
+	"unsafe"
+)
+
+// RingDir holds <SYMBOL>.in and <SYMBOL>.out. Set by MINI_EXCHANGE_DIR, same as the engine.
+var RingDir = ringDir()
+
+func ringDir() string {
+	if dir := os.Getenv("MINI_EXCHANGE_DIR"); dir != "" {
+		return dir
+	}
+	return "/tmp/mini_exchange"
+}
 
 const (
-	RingDir   = "/tmp/mini_exchange" // <SYMBOL>.in (Go -> engine), <SYMBOL>.out (engine -> Go)
-	ringSlots = 4096                 // RING_SLOTS
-	cacheLine = 128                  // CACHE_LINE: head @0, tail @128, slots @256
+	ringSlots = 4096
+	cacheLine = 128 // head at 0, tail at 128, slots from 256
 )
 
 // Request types.
@@ -17,8 +28,7 @@ const (
 	ReqCancel uint8 = 2
 )
 
-// Event types. Each request yields zero or more EvFill, then exactly one of
-// the others (the terminal event).
+// Event types. A request gets zero or more EvFill, then one of the others.
 const (
 	EvAccepted uint8 = 1
 	EvFill     uint8 = 2
@@ -44,7 +54,7 @@ type Request struct {
 }
 
 type Event struct {
-	Seq     uint64 // 1, 2, 3... per ring
+	Seq     uint64
 	OrderID uint64 // the request's order (the taker, for EvFill)
 	MakerID uint64 // EvFill only
 	Price   int64  // EvFill: trade price
@@ -54,7 +64,7 @@ type Event struct {
 	_       [6]byte
 }
 
-// Compile-time layout checks: these fail to build if a size drifts from C++.
+// Fails to compile if the sizes drift from the C++ structs.
 var (
 	_ [32]byte = [unsafe.Sizeof(Request{})]byte{}
 	_ [48]byte = [unsafe.Sizeof(Event{})]byte{}

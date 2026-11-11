@@ -1,11 +1,20 @@
 # Engine
 
-The engine is one C++17 file, `engine/matching_engine.cpp`, plus two headers: `ring_buffer.hpp` and `protocol.hpp`. It has no dependencies beyond the standard library and POSIX.
+The engine is C++17 with no dependencies beyond the standard library and POSIX.
+
+| File | What's in it |
+|---|---|
+| `book.hpp` | the order book and the request handler |
+| `wal.hpp` | the write-ahead log |
+| `ring_buffer.hpp` | the shared-memory ring |
+| `protocol.hpp` | the message layout shared with Go |
+| `matching_engine.cpp` | the server and the benchmark |
+| `matching_engine_test.cpp` | the tests |
 
 ```sh
 ./me --serve MINI [MORE...]   # serve these stocks
 ./me --bench                  # benchmark the book
-./me                          # run the tests
+./me.test                     # run the tests (built from matching_engine_test.cpp)
 ```
 
 ## Order book
@@ -77,4 +86,4 @@ The numbers cover the book only. They leave out the rings, the WAL write (about 
 
 ## Tests
 
-`./me` runs the tests. Build them with `-fsanitize=address,undefined`. They cover partial fills, FIFO order within a level, sweeping several levels, cancels, and WAL replay. The Go tests in `internal/exchange` build the real engine and talk to it over real rings.
+`./me.test` runs the tests. Build them with `-fsanitize=address,undefined`. They cover partial fills, FIFO order within a level, sweeping several levels, cancels, and WAL replay. The Go tests in `internal/exchange` build the real engine and talk to it over real rings.

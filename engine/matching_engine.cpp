@@ -1,7 +1,7 @@
 // Build:
-//   tests:   c++ -std=c++17 -g -fsanitize=address,undefined matching_engine.cpp -o me && ./me
-//   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
 //   serve:   c++ -std=c++17 -O2 matching_engine.cpp -o me && ./me --serve MINI [MORE...]
+//   bench:   c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
+//   tests:   see matching_engine_test.cpp
 //
 // Env:
 //   MINI_EXCHANGE_SPIN=1   busy-spin on empty rings. Only with a core to
@@ -13,114 +13,25 @@
 //
 // TODO: more stocks on more cores needs pthread_setaffinity_np per thread
 #include <algorithm>
-#include <array>
-#include <cassert>
+#include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdint>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <random>
-#include <iterator>
-#include <map>
-#include <vector>
-#include <list>
-#include <unordered_map>
-#include <string>
 #include <memory>
+#include <random>
+#include <string>
 #include <thread>
+#include <vector>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "book.hpp"
 #include "protocol.hpp"
-
-struct Order {
-    uint64_t id;
-    bool is_buy;
-    int64_t qty;
-};
-
-struct Fill {
-    uint64_t taker;
-    uint64_t maker;
-    int64_t price;
-    int64_t qty;
-};
-
-struct Loc {
-    bool is_buy;
-    int64_t price;
-    std::list<Order>::iterator it;
-};
-
-// One stock's order book. Only ever touched by that stock's thread: no locks.
-struct Book {
-    std::map<int64_t, std::list<Order>> asks;
-    std::map<int64_t, std::list<Order>> bids;
-    std::unordered_map<uint64_t, Loc> order_index;
-
-    std::vector<Fill> submit(Order order, int64_t price) {
-        auto& side = order.is_buy ? bids : asks;
-        auto& op = !order.is_buy ? bids : asks;
-
-        std::vector<Fill> fills;
-
-        while (order.qty > 0 && !op.empty()) {
-            auto level = order.is_buy ? op.begin() : std::prev(op.end());
-
-            bool crosses = order.is_buy ? level->first <= price
-                                        : level->first >= price;
-
-            if (!crosses) break;
-
-            auto& maker = level->second.front();
-
-            int64_t quantity = std::min(order.qty, maker.qty);
-
-            fills.push_back(Fill{order.id, maker.id, level->first, quantity}); // level->first == level_price
-
-            order.qty -= quantity;
-            maker.qty -= quantity;
-
-            if (maker.qty == 0) {
-                order_index.erase(maker.id);
-                level->second.pop_front();
-            }
-
-            if (level->second.empty()) op.erase(level);
-        }
-
-        if (order.qty > 0) {
-            auto& level = side[price];
-            level.push_back(order);
-            order_index[order.id] = {order.is_buy, price, std::prev(level.end())};
-        }
-
-        return fills;
-    }
-
-    // Returns the qty removed (Go releases that much of the reservation), 0 if not resting.
-    int64_t cancel(uint64_t id) {
-        auto it = order_index.find(id);
-
-        if (it == order_index.end()) return 0;
-
-        Loc& loc = it->second;
-
-        auto& book = loc.is_buy ? bids : asks;
-
-        auto level = book.find(loc.price);
-        int64_t removed = loc.it->qty;
-        level->second.erase(loc.it);
-        if (level->second.empty()) book.erase(level);
-
-        order_index.erase(it);
-
-        return removed;
-    }
-};
+#include "wal.hpp"
 
 // --- serve: one thread per stock, each with its own Book and rings ---
 
@@ -146,71 +57,6 @@ void idle(int& spins) {
 std::atomic<bool> stopping{false};
 
 void request_stop(int) { stopping.store(true); }
-
-// Both live serving and WAL replay use this, so a replay ends up with the
-// same book.
-template <typename Emit>
-void handle(Book& book, const Request& request, Emit&& emit) {
-    auto reject = [&](uint8_t reason) {
-        emit(Event{0, request.order_id, 0, 0, 0, EV_REJECTED, reason, {}});
-    };
-
-    if (request.type == REQ_NEW) {
-        if (request.qty <= 0 || request.price <= 0) {
-            reject(R_BAD_ORDER);
-            return;
-        }
-
-        Order order{request.order_id, request.is_buy == 1, request.qty};
-
-        for (const Fill& fill : book.submit(order, request.price)) {
-            emit(Event{0, fill.taker, fill.maker, fill.price, fill.qty, EV_FILL, R_NONE, {}});
-        }
-
-        auto rested = book.order_index.find(request.order_id);
-        int64_t resting = rested == book.order_index.end() ? 0 : rested->second.it->qty;
-        emit(Event{0, request.order_id, 0, request.price, resting, EV_ACCEPTED, R_NONE, {}});
-
-    } else if (request.type == REQ_CANCEL) {
-        int64_t removed = book.cancel(request.order_id);
-        if (removed == 0) reject(R_UNKNOWN_ORDER);
-        else emit(Event{0, request.order_id, 0, 0, removed, EV_CANCELED, R_NONE, {}});
-    } else {
-        reject(R_BAD_ORDER);
-    }
-}
-
-// --- WAL: raw Requests, appended before they're handled ---
-
-int open_wal(const std::string& path) {
-    return open(path.c_str(), O_RDWR | O_CREAT | O_APPEND, 0600);
-}
-
-// No events are sent during replay, Go already got them. A partial last
-// record (crash mid-write) was never handled, so it gets truncated.
-uint64_t replay_wal(int wal, Book& book) {
-    struct stat info;
-    if (fstat(wal, &info) != 0) return 0;
-    off_t whole = info.st_size - info.st_size % (off_t)sizeof(Request);
-    if (whole != info.st_size && ftruncate(wal, whole) != 0) {
-        std::perror("wal: truncate partial record");
-        std::exit(1);
-    }
-
-    uint64_t count = 0;
-    Request request;
-    // TODO: read in chunks if replay gets slow
-    while (pread(wal, &request, sizeof request, (off_t)(count * sizeof request)) == sizeof request) {
-        handle(book, request, [](const Event&) {});
-        count++;
-    }
-    return count;
-}
-
-// NOTE: no fsync. Survives the engine crashing, not the machine going down.
-bool append_wal(int wal, const Request& request) {
-    return write(wal, &request, sizeof request) == sizeof request;
-}
 
 struct Stock {
     std::string symbol;
@@ -302,181 +148,6 @@ void serve(const std::string& ring_dir, const std::string& wal_dir, int count, c
     std::printf("stopped\n");
 }
 
-// --- tests ---
-
-void test_rests_when_book_empty() {
-    Book book;
-    auto fills = book.submit({1, false, 10}, 100);     // sell 10 @ 100
-    assert(fills.empty());
-    assert(book.asks.at(100).front().qty == 10);       // resting on the ask side
-}
-
-void test_partial_fill_at_maker_price() {
-    Book book;
-    book.submit({1, false, 10}, 100);                  // maker: sell 10 @ 100
-    auto fills = book.submit({2, true, 4}, 101);       // taker: buy 4 @ 101
-    assert(fills.size() == 1);
-    assert(fills[0].taker == 2 && fills[0].maker == 1);
-    assert(fills[0].price == 100);                // maker's price, not 101
-    assert(fills[0].qty == 4);
-    assert(book.asks.at(100).front().qty == 6);        // remainder still resting
-    assert(book.bids.empty());                         // taker fully filled, didn't rest
-}
-
-void test_time_priority_same_level() {
-    Book book;
-    book.submit({1, false, 5}, 100);                   // first in line
-    book.submit({2, false, 5}, 100);                   // second in line
-    auto fills = book.submit({3, true, 7}, 100);
-    assert(fills.size() == 2);
-    assert(fills[0].maker == 1 && fills[0].qty == 5);
-    assert(fills[1].maker == 2 && fills[1].qty == 2);
-    assert(book.asks.at(100).front().id == 2 && book.asks.at(100).front().qty == 3);
-}
-
-void test_sweeps_levels_best_first() {
-    Book book;
-    book.submit({1, false, 5}, 101);
-    book.submit({2, false, 5}, 100);                   // better ask, added later
-    auto fills = book.submit({3, true, 8}, 101);
-    assert(fills.size() == 2);
-    assert(fills[0].price == 100 && fills[0].qty == 5);
-    assert(fills[1].price == 101 && fills[1].qty == 3);
-    assert(book.asks.count(100) == 0);                 // emptied level got erased
-}
-
-void test_no_cross_rests() {
-    Book book;
-    book.submit({1, false, 5}, 100);
-    auto fills = book.submit({2, true, 5}, 99);
-    assert(fills.empty());
-    assert(book.bids.at(99).front().id == 2);
-    assert(book.asks.at(100).front().qty == 5);        // untouched
-}
-
-void test_sell_hits_highest_bid() {
-    Book book;
-    book.submit({1, true, 5}, 99);
-    book.submit({2, true, 5}, 101);                    // best bid
-    auto fills = book.submit({3, false, 5}, 98);
-    assert(fills.size() == 1);
-    assert(fills[0].maker == 2 && fills[0].price == 101);
-}
-
-void test_cancel_resting() {
-    Book book;
-    book.submit({1, false, 5}, 100);
-    assert(book.cancel(1));
-    assert(book.asks.empty());                         // emptied level erased
-    assert(book.submit({2, true, 5}, 100).empty());    // nothing left to hit
-}
-
-void test_cancel_unknown() {
-    Book book;
-    assert(!book.cancel(42));
-}
-
-void test_cancel_after_full_fill() {
-    Book book;
-    book.submit({1, false, 5}, 100);
-    book.submit({2, true, 5}, 100);                    // fills 1 completely
-    assert(!book.cancel(1));
-    assert(!book.cancel(2));                           // taker never rested
-}
-
-void test_cancel_partial_remainder() {
-    Book book;
-    book.submit({1, false, 10}, 100);
-    book.submit({2, true, 4}, 100);                    // 6 left on order 1
-    assert(book.cancel(1));
-    assert(book.asks.empty());
-}
-
-void test_cancel_middle_keeps_priority() {
-    Book book;
-    book.submit({1, false, 5}, 100);
-    book.submit({2, false, 5}, 100);
-    book.submit({3, false, 5}, 100);
-    assert(book.cancel(2));
-    auto fills = book.submit({4, true, 10}, 100);
-    assert(fills.size() == 2);
-    assert(fills[0].maker == 1 && fills[1].maker == 3);
-    assert(book.asks.empty());
-}
-
-void test_cancel_twice() {
-    Book book;
-    book.submit({1, true, 5}, 99);
-    assert(book.cancel(1));
-    assert(!book.cancel(1));
-    assert(book.bids.empty());
-}
-
-// Runs requests live (logging each to a temp WAL), then replays that WAL into
-// a fresh book and checks both books hold the same orders in the same order.
-void test_wal_replay_rebuilds_book() {
-    char path[] = "/tmp/me_wal_test_XXXXXX";
-    int wal = mkstemp(path);
-    assert(wal >= 0);
-
-    auto new_order = [](uint64_t id, bool is_buy, int64_t price, int64_t qty) {
-        return Request{id, price, qty, REQ_NEW, (uint8_t)is_buy, {}};
-    };
-    std::vector<Request> requests = {
-        new_order(1, false, 100, 10),
-        new_order(2, false, 100, 5),
-        new_order(3, true, 99, 7),
-        new_order(4, true, 100, 4),     // fills 4 of order 1
-        Request{2, 0, 0, REQ_CANCEL, 0, {}},
-        new_order(5, false, 101, 3),
-        new_order(6, true, 0, 1),       // bad price
-        Request{42, 0, 0, REQ_CANCEL, 0, {}},
-    };
-    Book live;
-    for (const Request& request : requests) {
-        assert(append_wal(wal, request));
-        handle(live, request, [](const Event&) {});
-    }
-
-    Book replayed;
-    assert(replay_wal(wal, replayed) == requests.size());
-
-    // price, id, qty of every resting order, in book order
-    auto dump = [](const Book& book) {
-        std::vector<std::array<int64_t, 3>> orders;
-        for (auto* side : {&book.asks, &book.bids})
-            for (auto& [price, level] : *side)
-                for (const Order& order : level) orders.push_back({price, (int64_t)order.id, order.qty});
-        return orders;
-    };
-    assert(dump(live) == dump(replayed));
-    assert(replayed.asks.at(100).front().qty == 6);
-    assert(replayed.cancel(3) == 7);
-
-    close(wal);
-    unlink(path);
-}
-
-void test_wal_drops_partial_record() {
-    char path[] = "/tmp/me_wal_test_XXXXXX";
-    int wal = mkstemp(path);
-    assert(wal >= 0);
-
-    assert(append_wal(wal, Request{1, 100, 5, REQ_NEW, 0, {}}));
-    char junk[10] = {};
-    assert(write(wal, junk, sizeof junk) == sizeof junk);
-
-    Book book;
-    assert(replay_wal(wal, book) == 1);
-    assert(book.asks.at(100).front().id == 1);
-    struct stat info;
-    fstat(wal, &info);
-    assert(info.st_size == sizeof(Request));
-
-    close(wal);
-    unlink(path);
-}
-
 // --- benchmark: ./me --bench. Build with -O2 -DNDEBUG, no sanitizers. ---
 
 struct Op {
@@ -537,19 +208,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    test_rests_when_book_empty();
-    test_partial_fill_at_maker_price();
-    test_time_priority_same_level();
-    test_sweeps_levels_best_first();
-    test_no_cross_rests();
-    test_sell_hits_highest_bid();
-    test_cancel_resting();
-    test_cancel_unknown();
-    test_cancel_after_full_fill();
-    test_cancel_partial_remainder();
-    test_cancel_middle_keeps_priority();
-    test_cancel_twice();
-    test_wal_replay_rebuilds_book();
-    test_wal_drops_partial_record();
-    std::puts("all tests passed");
+    std::fprintf(stderr, "usage: %s --serve SYMBOL... | --bench\n", argv[0]);
+    return 1;
 }

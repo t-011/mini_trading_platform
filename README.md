@@ -53,7 +53,7 @@ The book starts empty, so a buy has nothing to fill against until someone sells.
 ## Tests
 
 ```sh
-cd engine && c++ -std=c++17 -g -fsanitize=address,undefined matching_engine.cpp -o me && ./me
+cd engine && c++ -std=c++17 -g -fsanitize=address,undefined matching_engine_test.cpp -o me.test && ./me.test
 cd engine && c++ -std=c++17 -O2 -DNDEBUG matching_engine.cpp -o me && ./me --bench
 go test -race ./internal/...          # the trading tests skip unless DB_URL is set
 ```
@@ -61,7 +61,7 @@ go test -race ./internal/...          # the trading tests skip unless DB_URL is 
 ## Layout
 
 ```
-engine/              C++ matching engine, ring buffer, wire protocol
+engine/              C++ matching engine, ring buffer, wire protocol, WAL
 internal/exchange/   Go side of the rings: Dial, Submit, Cancel
 internal/trading/    orders, reservations, fills, portfolio
 internal/api/        HTTP handlers and routes

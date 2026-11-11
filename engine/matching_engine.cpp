@@ -15,6 +15,7 @@
 // MINI_EXCHANGE_WAL_DIR sets where the write-ahead logs live (default
 // /tmp/mini_exchange_wal). It has to be on disk, not with the (tmpfs) rings.
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <csignal>
 #include <cstdint>
@@ -416,6 +417,71 @@ void test_cancel_twice() {
     assert(book.bids.empty());
 }
 
+// Runs requests live (logging each to a temp WAL), then replays that WAL into
+// a fresh book and checks both books hold the same orders in the same order.
+void test_wal_replay_rebuilds_book() {
+    char path[] = "/tmp/me_wal_test_XXXXXX";
+    int wal = mkstemp(path);
+    assert(wal >= 0);
+
+    auto new_order = [](uint64_t id, bool is_buy, int64_t price, int64_t qty) {
+        return Request{id, price, qty, REQ_NEW, (uint8_t)is_buy, {}};
+    };
+    std::vector<Request> requests = {
+        new_order(1, false, 100, 10),
+        new_order(2, false, 100, 5),
+        new_order(3, true, 99, 7),
+        new_order(4, true, 100, 4),     // fills 4 of order 1
+        Request{2, 0, 0, REQ_CANCEL, 0, {}},
+        new_order(5, false, 101, 3),
+        new_order(6, true, 0, 1),       // bad price
+        Request{42, 0, 0, REQ_CANCEL, 0, {}},
+    };
+    Book live;
+    for (const Request& request : requests) {
+        assert(append_wal(wal, request));
+        handle(live, request, [](const Event&) {});
+    }
+
+    Book replayed;
+    assert(replay_wal(wal, replayed) == requests.size());
+
+    // price, id, qty of every resting order, in book order
+    auto dump = [](const Book& book) {
+        std::vector<std::array<int64_t, 3>> orders;
+        for (auto* side : {&book.asks, &book.bids})
+            for (auto& [price, level] : *side)
+                for (const Order& order : level) orders.push_back({price, (int64_t)order.id, order.qty});
+        return orders;
+    };
+    assert(dump(live) == dump(replayed));
+    assert(replayed.asks.at(100).front().qty == 6);
+    assert(replayed.cancel(3) == 7);
+
+    close(wal);
+    unlink(path);
+}
+
+void test_wal_drops_partial_record() {
+    char path[] = "/tmp/me_wal_test_XXXXXX";
+    int wal = mkstemp(path);
+    assert(wal >= 0);
+
+    assert(append_wal(wal, Request{1, 100, 5, REQ_NEW, 0, {}}));
+    char junk[10] = {};
+    assert(write(wal, junk, sizeof junk) == sizeof junk);
+
+    Book book;
+    assert(replay_wal(wal, book) == 1);
+    assert(book.asks.at(100).front().id == 1);
+    struct stat info;
+    fstat(wal, &info);
+    assert(info.st_size == sizeof(Request));
+
+    close(wal);
+    unlink(path);
+}
+
 // --- benchmark: ./me --bench. Build with -O2 -DNDEBUG, no sanitizers. ---
 
 struct Op {
@@ -488,5 +554,7 @@ int main(int argc, char** argv) {
     test_cancel_partial_remainder();
     test_cancel_middle_keeps_priority();
     test_cancel_twice();
+    test_wal_replay_rebuilds_book();
+    test_wal_drops_partial_record();
     std::puts("all tests passed");
 }
